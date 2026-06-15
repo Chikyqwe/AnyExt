@@ -40,9 +40,44 @@ router.get('/app/screenshots', imgs.listImages);
 router.get('/app/images/:imageName', imgs.serveImage);
 
 // Player y App
-router.get('/player/:id/:ep', (req, res) => sendHtml(res, 'player.html'));
-router.get('/app', (req, res) => sendHtml(res, 'app.html'));
+// Player con meta tags dinámicos
+router.get('/player/:id/:ep', async (req, res) => {
+  try {
+    const { id, ep } = req.params;
+    // Buscamos los datos del anime usando el ID de los parámetros de la URL
+    const animeData = await getAnimeByUnitId(id);
 
+    // Configuramos las variables para los meta tags (puedes incluir el episodio en el título si gustas)
+    const title = animeData ? `${animeData.title} - Episodio ${ep}` : 'Ver Anime Online';
+    const desc = animeData ? `Disfruta del episodio ${ep} de ${animeData.title} en HD.` : 'Disfruta de los mejores animes online';
+    const image = animeData?.image || '';
+    const url = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+
+    // Construimos los meta tags dinámicos
+    const metaTags = `
+      <meta property="og:title" content="${title}">
+      <meta property="og:description" content="${desc}">
+      <meta property="og:image" content="${image}">
+      <meta property="og:url" content="${url}">
+      <meta name="twitter:card" content="summary_large_image">  
+      <meta property="og:image:width" content="1200">
+      <meta property="og:image:height" content="630">
+    `;
+
+    // Obtenemos el HTML de player.html desde la caché e inyectamos los meta tags
+    const baseHtml = htmlCache['player.html'] || '';
+    const html = baseHtml.replace('</head>', `${metaTags}\n</head>`);
+
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
+  } catch (err) {
+    console.error('[ERROR] /player/:id/:ep:', err.message);
+    // Si algo falla, como fallback podemos enviar el HTML limpio sin meta tags para no romper la app
+    sendHtml(res, 'player.html');
+  }
+});
+
+router.get('/app', (req, res) => sendHtml(res, 'app.html'));
 // Privacy policy
 router.get('/privacy-policy.html', (req, res) => sendHtml(res, 'privacy-policy.html'));
 
