@@ -43,7 +43,7 @@ function rewriteM3U8(m3u8, playlistUrl, referer) {
 
       const gid = Buffer.from(absoluteUrl).toString('base64url');
       const f = Buffer.from(referer).toString('base64url');
-      return `https://anyext-m5lt.onrender.com/api/hls?gid=${gid}&f=${f}&Did=1`;
+      return `https://anyext.onrender.com/api/hls?gid=${gid}&f=${f}&Did=1`;
     })
     .join('\n');
 
@@ -102,7 +102,7 @@ function decodeObfuscatedData(obfuscated) {
 
 // Función principal
 async function extractVoe(pageUrl) {
-  const fail = () => ({ status: 701, mjs:'general error', server: 'voe' });
+  const fail = () => ({ status: 701, mjs: 'general error', server: 'voe' });
   console.log(`[VOE EXTRACTOR] Extrayendo video desde: ${pageUrl}`);
 
   try {
@@ -211,4 +211,4 @@ async function extractVoe(pageUrl) {
   }
 }
 
-module.exports = {extractVoe}
+module.exports = { extractVoe }

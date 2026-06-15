@@ -20,7 +20,7 @@ function rewriteM3U8(m3u8, playlistUrl, referer) {
 
             const gid = Buffer.from(absoluteUrl).toString('base64url');
             const f = Buffer.from(referer).toString('base64url');
-            return `https://anyext-m5lt.onrender.com/api/hls?gid=${gid}&f=${f}&Did=1`;
+            return `https://anyext.onrender.com/api/hls?gid=${gid}&f=${f}&Did=1`;
         })
         .join('\n');
 
