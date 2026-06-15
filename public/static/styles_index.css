@@ -1,0 +1,209 @@
+/* =========================================
+   AnyEXT — Index page styles
+   ========================================= */
+ 
+/* ── Page loader ── */
+#loader {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 28px;
+  z-index: 9999;
+  transition: opacity 0.6s ease;
+}
+ 
+#loader.fade-out {
+  opacity: 0;
+  pointer-events: none;
+}
+ 
+#loader.fade-once {
+  opacity: 0;
+  display: none;
+  transition: opacity 0.5s ease;
+}
+ 
+#loader.fade-once.fade-in {
+  opacity: 1;
+  display: flex;
+}
+ 
+#loader.fade-once.fade-out { opacity: 0; }
+ 
+/* ── Loader visual: katana slash ── */
+.loader-logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  animation: logoReveal 0.6s ease forwards;
+  opacity: 0;
+  animation-delay: 0.1s;
+}
+ 
+.loader-logo-text {
+  font-family: var(--font-body);
+  font-size: 2.2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+ 
+.loader-logo-text span { color: var(--accent); }
+ 
+.loader-logo-sub {
+  font-family: var(--font-jp);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  letter-spacing: 0.12em;
+}
+ 
+@keyframes logoReveal {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+ 
+/* Progress bar */
+.loader-bar-wrap {
+  width: 200px;
+  height: 3px;
+  background: var(--bg-4);
+  border-radius: 999px;
+  overflow: hidden;
+  animation: logoReveal 0.4s ease 0.4s forwards;
+  opacity: 0;
+}
+ 
+.loader-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), #58a6ff);
+  border-radius: 999px;
+  box-shadow: 0 0 8px var(--accent);
+  transition: width 0.3s ease-out;
+}
+ 
+@keyframes loadProgress {
+  0%   { width: 0%; }
+  40%  { width: 55%; }
+  70%  { width: 75%; }
+  90%  { width: 92%; }
+  100% { width: 100%; }
+}
+ 
+/* Three dots fallback */
+.dot {
+  width: 10px;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 50%;
+  animation: dotBounce 1s infinite ease-in-out;
+  display: none;
+}
+
+.dot:nth-child(2) { animation-delay: 0.18s; }
+.dot:nth-child(3) { animation-delay: 0.36s; }
+.dot:nth-child(4) { animation-delay: 0.54s; }
+
+@keyframes dotBounce {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-14px); }
+}
+
+/* ── Fade utilities ── */
+.fade-out {
+  animation: fadeOutAnim 0.35s forwards;
+}
+
+.fade-in {
+  animation: fadeInAnim 0.35s forwards;
+}
+
+@keyframes fadeOutAnim {
+  to { opacity: 0; visibility: hidden; }
+}
+
+@keyframes fadeInAnim {
+  from { opacity: 0; }
+  to   { opacity: 1; visibility: visible; }
+}
+
+/* ── Card container (old class kept for compat) ── */
+.card-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: center;
+}
+/* ── Home feed cards (últimos episodios) ── */
+.anime-card-init {
+  position: relative;
+  background: var(--bg-2);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform var(--transition), box-shadow var(--transition), border-color var(--transition);
+  height: 100%;
+}
+
+.anime-card-init:hover {
+  transform: translateY(-6px);
+  box-shadow: var(--shadow-card), 0 0 0 1px var(--accent);
+  border-color: var(--accent);
+}
+
+.card-img {
+  width: 100%;
+  height: 130px;
+  object-fit: cover;
+  display: block;
+  transition: filter var(--transition);
+}
+
+.anime-card-init:hover .card-img {
+  filter: brightness(0.75);
+}
+
+.card-content {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  padding: 28px 12px 12px;
+  background: linear-gradient(to top, rgba(0,0,0,0.92) 0%, transparent 100%);
+}
+
+.card-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-subtitle {
+  font-size: 0.78rem;
+  color: rgba(255,255,255,0.65);
+  margin: 2px 0 0;
+}
+
+/* Long-press progress bar */
+.longpress-bar {
+  position: absolute;
+  bottom: 0; left: 0;
+  height: 3px;
+  width: 0%;
+  background: var(--accent);
+  z-index: 10;
+  border-radius: 0 2px 2px 0;
+}
+/* ── Anime modal ── */
+#animeModal {
+  backdrop-filter: blur(10px);
+  padding-left: 0;
+}
