@@ -299,7 +299,7 @@ exports.appV = asyncHandler(async (req, res) => {
     return major * 100000 + minor * 1000 + patch;
   }
   const ver = req.query.version ?? null;
-  const { data: files, error } = await supabase.storage.from('AnyExtApp').list('', { limit: 200 });
+  const { data: files, error } = await supabase.storage.from('AnyExt').list('', { limit: 200 });
   if (error) throw error;
 
   const apk = files

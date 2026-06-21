@@ -26,16 +26,7 @@ const {
   proxyImage
 } = require('../utils/helpers');
 
-const MIRRORS = [
-  'FLV',
-  'ONE',
-  'TIO',
-  'JK',
-  'ANIYAE',
-  'HENTAILA',
-  'TIOHENTAI'
-];
-
+const MIRRORS = ['FLV', 'ONE', 'TIO', 'JK', 'ANIYAE', 'HENTAILA', 'TIOHENTAI'];
 const PER_PAGE = 24;
 
 // ─────────────────────────────────────────────
@@ -59,7 +50,6 @@ let searchable = [];
 let fuse = null;
 
 function buildSearchIndex() {
-
   const all = readAnimeList();
 
   searchable = all.map(anime => ({
@@ -68,41 +58,23 @@ function buildSearchIndex() {
   }));
 
   fuse = new Fuse(searchable, {
-
     includeScore: true,
-
     threshold: 0.2,
-
     ignoreLocation: true,
-
     minMatchCharLength: 2,
-
     shouldSort: true,
-
     findAllMatches: true,
-
     useExtendedSearch: true,
-
     keys: [
-
-      {
-        name: 'normalizedTitle',
-        weight: 1
-      },
-
-      {
-        name: 'title',
-        weight: 0.8
-      }
+      { name: 'normalizedTitle', weight: 1 },
+      { name: 'title', weight: 0.8 }
     ]
   });
 
-  console.log(
-    `[SEARCH] Indexed ${searchable.length} animes`
-  );
+  console.log(`[SEARCH] Indexed ${searchable.length} animes`);
 }
 
-// construir índice al iniciar
+// Construir índice al iniciar
 buildSearchIndex();
 
 // ─────────────────────────────────────────────
@@ -110,26 +82,16 @@ buildSearchIndex();
 // ─────────────────────────────────────────────
 
 exports.list = asyncHandler(async (req, res) => {
-
   const p = req.query.p;
 
   if (p === 'all') {
-    return res.sendFile(
-      getJSONPath('anime_list.json')
-    );
+    return res.sendFile(getJSONPath('anime_list.json'));
   }
 
-  const page = Math.max(
-    1,
-    parseInt(p) || 1
-  );
-
+  const page = Math.max(1, parseInt(p) || 1);
   const all = readAnimeList();
-
   const total = all.length;
-
-  const start =
-    (page - 1) * PER_PAGE;
+  const start = (page - 1) * PER_PAGE;
 
   const items = all
     .slice(start, start + PER_PAGE)
@@ -151,103 +113,62 @@ exports.list = asyncHandler(async (req, res) => {
 // GET /anime/last
 // ─────────────────────────────────────────────
 
-exports.last = (req, res) =>
-  res.sendFile(
-    getJSONPath('lastep.json')
-  );
+exports.last = (req, res) => res.sendFile(getJSONPath('lastep.json'));
 
 // ─────────────────────────────────────────────
 // GET /api/info?uid=
 // ─────────────────────────────────────────────
 
 exports.info = asyncHandler(async (req, res) => {
-
   const uid = parseInt(req.query.uid);
 
   if (!uid) {
-    return res.status(400).json({
-      error: 'Falta parámetro uid'
-    });
+    return res.status(400).json({ error: 'Falta parámetro uid' });
   }
 
   const anime = getAnimeByUnitId(uid);
 
   if (!anime) {
-    return res.status(404).json({
-      error: `No se encontró anime con uid = ${uid} `
-    });
+    return res.status(404).json({ error: `No se encontró anime con uid = ${uid}` });
   }
 
   // ── DESCRIPTION CACHE ─────────────────────
-
-  const cacheKey = `desc:${uid} `;
-
-  let description =
-    descriptionCache.load(cacheKey) || '';
+  const cacheKey = `desc:${uid}`;
+  let description = descriptionCache.load(cacheKey) || '';
 
   if (!description) {
-
     const sources = anime.sources || {};
 
     for (const url of Object.values(sources)) {
-
       if (!url) continue;
-
       try {
-
-        description =
-          await getDescription(url);
-
+        description = await getDescription(url);
         if (description) break;
-
       } catch (err) {
-
-        console.warn(
-          `[info / desc] ${url}: ${err.message} `
-        );
+        console.warn(`[info / desc] ${url}: ${err.message}`);
       }
     }
 
     if (description) {
-
-      descriptionCache.save(
-        cacheKey,
-        description,
-        LRU_DESCRIPTION_TTL
-      );
+      descriptionCache.save(cacheKey, description, LRU_DESCRIPTION_TTL);
     }
   }
 
   // ── EPISODES ──────────────────────────────
-
   let episodes = [];
   let status = null;
   let source = null;
 
   for (const mirrorKey of MIRRORS) {
-
-    const sourceUrl =
-      anime.sources?.[mirrorKey];
-
+    const sourceUrl = anime.sources?.[mirrorKey];
     if (!sourceUrl) continue;
 
     try {
+      const raw = await getEpisodes(sourceUrl);
+      if (!raw?.episodes?.length) continue;
 
-      const raw =
-        await getEpisodes(sourceUrl);
-
-      if (!raw?.episodes?.length) {
-        continue;
-      }
-
-      const isEnd =
-        Boolean(raw.isEnd);
-
-      status =
-        isEnd
-          ? 'Finalizado'
-          : 'En emisión';
-
+      const isEnd = Boolean(raw.isEnd);
+      status = isEnd ? 'Finalizado' : 'En emisión';
       source = mirrorKey;
 
       episodes = raw.episodes.map(ep => ({
@@ -256,41 +177,23 @@ exports.info = asyncHandler(async (req, res) => {
       }));
 
       break;
-
     } catch (err) {
-
-      console.warn(
-        `[info/eps] ${mirrorKey}: ${err.message}`
-      );
+      console.warn(`[info/eps] ${mirrorKey}: ${err.message}`);
     }
   }
 
   res.json({
-
     type: 'anime',
-
     title: anime.title,
-
     slug: anime.slug,
-
-    category:
-      anime.category || 'anime',
-
+    category: anime.category || 'anime',
     eps: episodes.length,
-
     desc: description || '',
-
     tags: anime.tags || [],
-
-    status:
-      status || 'Desconocido',
-
+    status: status || 'Desconocido',
     episodes,
-
     uid,
-
     image: anime.image || '',
-
     source: source || '',
   });
 });
@@ -300,29 +203,17 @@ exports.info = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────
 
 exports.basicInfo = asyncHandler(async (req, res) => {
-
-  const uid =
-    parseInt(req.query.uid);
-
-  const anime =
-    getAnimeByUnitId(uid);
+  const uid = parseInt(req.query.uid);
+  const anime = getAnimeByUnitId(uid);
 
   if (!anime) {
-
-    return res.status(404).json({
-      error:
-        `No se encontró anime con uid=${uid}`
-    });
+    return res.status(404).json({ error: `No se encontró anime con uid=${uid}` });
   }
 
   res.json({
-
     type: 'anime',
-
     title: anime.title,
-
     slug: anime.slug,
-
     uid,
   });
 });
@@ -332,254 +223,184 @@ exports.basicInfo = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────
 
 exports.img = asyncHandler(async (req, res) => {
+  const { uid, type, ep } = req.body;
 
-  const {
-    uid,
-    type,
-    ep
-  } = req.body;
+  if (!uid) return res.status(400).json({ error: 'Falta uid' });
+  if (!type) return res.status(400).json({ error: 'Falta type' });
 
-  if (!uid) {
-    return res.status(400).json({
-      error: 'Falta uid'
-    });
-  }
-
-  if (!type) {
-    return res.status(400).json({
-      error: 'Falta type'
-    });
-  }
-
-  const anime =
-    getAnimeByUnitId(
-      parseInt(uid)
-    );
-
+  const anime = getAnimeByUnitId(parseInt(uid));
   if (!anime) {
-
-    return res.status(404).json({
-      error:
-        `Anime uid=${uid} no encontrado`
-    });
+    return res.status(404).json({ error: `Anime uid=${uid} no encontrado` });
   }
 
   // ── COVER ─────────────────────────────────
-
   if (type === 'cover') {
-
-    const imageUrl =
-      anime.image || anime.cover;
-
+    const imageUrl = anime.image || anime.cover;
     if (!imageUrl) {
-
-      return res.status(404).json({
-        error: 'Sin imagen'
-      });
+      return res.status(404).json({ error: 'Sin imagen' });
     }
-
     return proxyImage(imageUrl, res);
   }
 
   // ── EP IMAGE ──────────────────────────────
-
   if (type === 'ep') {
-
-    const epNum =
-      parseInt(ep);
-
-    if (!epNum) {
-
-      return res.status(400).json({
-        error: 'Falta ep'
-      });
-    }
+    const epNum = parseInt(ep);
+    if (!epNum) return res.status(400).json({ error: 'Falta ep' });
 
     for (const mirrorKey of MIRRORS) {
-
-      const sourceUrl =
-        anime.sources?.[mirrorKey];
-
+      const sourceUrl = anime.sources?.[mirrorKey];
       if (!sourceUrl) continue;
 
       try {
-
-        const raw =
-          await getEpisodes(sourceUrl);
-
-        const found =
-          raw?.episodes?.find(
-            e =>
-              Number(e.number) === epNum
-          );
+        const raw = await getEpisodes(sourceUrl);
+        const found = raw?.episodes?.find(e => Number(e.number) === epNum);
 
         if (found?.img) {
-
-          return proxyImage(
-            found.img,
-            res
-          );
+          return proxyImage(found.img, res);
         }
-
       } catch { }
     }
 
-    // fallback
-
-    const fallback =
-      anime.image || anime.cover;
-
+    // Fallback
+    const fallback = anime.image || anime.cover;
     if (fallback) {
       return proxyImage(fallback, res);
     }
 
-    return res.status(404).json({
-      error:
-        'Imagen de episodio no encontrada'
-    });
+    return res.status(404).json({ error: 'Imagen de episodio no encontrada' });
   }
 
-  return res.status(400).json({
-    error:
-      `type inválido: ${type}`
-  });
+  return res.status(400).json({ error: `type inválido: ${type}` });
 });
+
 // ROKU APP
 exports.rokuimg = (req, res) => {
   const { uid } = req.query;
   const anime = getAnimeByUnitId(parseInt(uid));
+
   if (!anime) {
-    return res.status(404).json({
-      error: `Anime uid=${uid} no encontrado`
-    });
+    return res.status(404).json({ error: `Anime uid=${uid} no encontrado` });
   }
+
   const imageUrl = anime.image || anime.cover;
   if (!imageUrl) {
-    return res.status(404).json({
-      error: 'Sin imagen'
-    });
+    return res.status(404).json({ error: 'Sin imagen' });
   }
+
   return proxyImage(imageUrl, res);
-}
+};
+
 // ─────────────────────────────────────────────
 // SEARCH
 // ─────────────────────────────────────────────
 
 exports.search = asyncHandler(async (req, res) => {
-
   const { query } = req.body;
-
   if (!query?.trim()) {
+    return res.status(400).json({ error: 'Falta query' });
+  }
 
-    return res.status(400).json({
-      error: 'Falta query'
+  let results = [];
+  let limit = 20; // Límite por defecto para búsqueda normal
+
+  const match = query.trim().match(/^:\$([\w.]+):(.+)$/);
+
+  if (match) {
+    // Si es búsqueda avanzada, quitamos el límite (puedes poner Infinity o un número muy alto)
+    limit = Infinity;
+
+    const [, keyPath, rawValue] = match;
+    const targetValue = rawValue.trim().toLowerCase();
+    // Filtrar directamente en el array 'searchable'
+    const filtered = searchable.filter(anime => {
+
+      // Función auxiliar que ignora mayúsculas/minúsculas en las llaves del JSON
+      const getValueByPath = (obj, path) => {
+        return path.split('.').reduce((acc, part) => {
+          if (!acc) return undefined;
+
+          // Buscar una llave que coincida ignorando mayúsculas/minúsculas
+          const targetKey = Object.keys(acc).find(
+            k => k.toLowerCase() === part.toLowerCase()
+          );
+
+          return targetKey ? acc[targetKey] : undefined;
+        }, obj);
+      };
+
+      const animeVal = getValueByPath(anime, keyPath);
+
+      if (animeVal === undefined || animeVal === null) return false;
+
+      if (typeof animeVal === 'number') {
+        return animeVal === Number(rawValue.trim());
+      }
+
+      return String(animeVal).toLowerCase() === targetValue;
     });
-  }
 
-  const term = normalize(query);
+    // Mapear al formato interno de resultados
+    results = filtered.map(anime => ({
+      item: anime,
+      score: 0
+    }));
 
-  // ─────────────────────────────────────────
-  // LOCAL SEARCH
-  // ─────────────────────────────────────────
+  } else {
+    // 2. BÚSQUEDA NORMAL (Fuse.js + Jikan API)
+    const term = normalize(query);
+    results = fuse.search(term);
 
-  let results =
-    fuse.search(term);
+    try {
+      const response = await fetch(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(term)}&limit=10`);
 
-  // ─────────────────────────────────────────
-  // JIKAN BOOST
-  // ─────────────────────────────────────────
+      if (response.ok) {
+        const json = await response.json();
+        const aliases = [];
 
-  try {
+        for (const anime of json.data) {
+          if (!anime.title) continue;
+          const n = normalize(anime.title);
+          if (n && !aliases.includes(n)) {
+            aliases.push(n);
+          }
+        }
 
-    const response = await fetch(
-      `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(term)}&limit=10`
-    );
-
-    if (response.ok) {
-
-      const json = await response.json();
-
-      const aliases = [];
-
-      for (const anime of json.data) {
-
-        if (!anime.title) continue;
-
-        const n = normalize(anime.title);
-
-        if (
-          n &&
-          !aliases.includes(n)
-        ) {
-          aliases.push(n);
+        for (const alias of aliases) {
+          const exactMatches = searchable.filter(a => a.normalizedTitle === alias);
+          for (const anime of exactMatches) {
+            results.push({ item: anime, score: 0 });
+          }
         }
       }
-
-      // buscar aliases también
-
-      for (const alias of aliases) {
-
-        const exactMatches = searchable.filter(
-          a => a.normalizedTitle === alias
-        );
-
-        for (const anime of exactMatches) {
-
-          results.push({
-            item: anime,
-            score: 0
-          });
-        }
-      }
+    } catch (err) {
+      console.error('[JIKAN]', err.message);
     }
-
-  } catch (err) {
-
-    console.error(
-      '[JIKAN]',
-      err.message
-    );
   }
-  // ─────────────────────────────────────────
-  // DEDUPE + SORT
-  // ─────────────────────────────────────────
 
+  // ─────────────────────────────────────────
+  // DEDUPE + SORT (Aplica para ambos flujos)
+  // ─────────────────────────────────────────
   const unique = new Map();
 
   for (const r of results) {
+    const id = Number(r.item.unit_id);
+    const current = unique.get(id);
 
-    const id =
-      Number(r.item.unit_id);
-
-    const current =
-      unique.get(id);
-
-    if (
-      !current ||
-      r.score < current.score
-    ) {
+    if (!current || r.score < current.score) {
       unique.set(id, r);
     }
   }
 
-  const finalResults =
-    [...unique.values()]
-      .sort((a, b) => a.score - b.score)
-      .slice(0, 20)
-      .map(r => ({
-
-        title: r.item.title,
-
-        uid:
-          Number(r.item.unit_id),
-
-        unit_id:
-          Number(r.item.unit_id),
-
-        image: r.item.image,
-
-        score: r.score
-      }));
+  const finalResults = [...unique.values()]
+    .sort((a, b) => a.score - b.score)
+    .slice(0, limit)
+    .map(r => ({
+      title: r.item.title,
+      uid: Number(r.item.unit_id),
+      unit_id: Number(r.item.unit_id),
+      image: r.item.image,
+      score: r.score
+    }));
 
   res.json(finalResults);
 });
@@ -589,13 +410,8 @@ exports.search = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────
 
 exports.rebuildSearch = asyncHandler(async (req, res) => {
-
   buildSearchIndex();
-
-  res.json({
-    success: true,
-    indexed: searchable.length
-  });
+  res.json({ success: true, indexed: searchable.length });
 });
 
 // ─────────────────────────────────────────────
@@ -603,16 +419,9 @@ exports.rebuildSearch = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────
 
 exports.initmjs = asyncHandler(async (req, res) => {
-
   res.json({
-
-    mjs:
-      'This is the AnyExt API, please return to the main page.',
-
-    web:
-      'https://anyext-m5lt.onrender.com/',
-
-    date:
-      new Date().toISOString()
+    mjs: 'This is the AnyExt API, please return to the main page.',
+    web: 'https://anyext-m5lt.onrender.com/',
+    date: new Date().toISOString()
   });
 });

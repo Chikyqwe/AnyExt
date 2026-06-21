@@ -5,34 +5,53 @@ const router = express.Router();
 const { getAnimeByUnitId } = require('../services/jsonService');
 const imgs = require('../controllers/imageController');
 
-// -------------------- CACHE HTML --------------------
-const HTML_FILES = ['index.html', 'player.html', 'app.html', 'app_redir.html', 'privacy-policy.html'];
-const htmlCache = {};
+const axios = require('axios');
+const STATIC_SERVER_URL = process.env.STATIC_SERVER_URL;
 
-HTML_FILES.forEach(file => {
-  const fullPath = path.join(__dirname, '..', '..', 'public', file);
-  try {
-    htmlCache[file] = fs.readFileSync(fullPath, 'utf8');
-    // Solo log inicial, no en cada request
-    console.log(`[CACHE] HTML cargado: ${file}`);
-  } catch (err) {
-    console.warn(`[CACHE] No se pudo cargar ${file}: ${err.message}`);
-    htmlCache[file] = '';
+async function getHtmlContent(filename) {
+  let content = '';
+  let status = 200;
+
+  if (STATIC_SERVER_URL) {
+    try {
+      const response = await axios.get(`${STATIC_SERVER_URL}/${filename}`);
+      content = response.data;
+    } catch (err) {
+      console.warn(`[FETCH] No se pudo cargar ${filename} desde remoto: ${err.message}`);
+      const fullPath = path.join(__dirname, '..', '..', 'public', 'index.html'); // fallback a index.html que tiene el 503
+      try {
+        content = fs.readFileSync(fullPath, 'utf8');
+      } catch (e) {
+        content = '503 Service Unavailable';
+      }
+      status = 503;
+    }
+  } else {
+    const fullPath = path.join(__dirname, '..', '..', 'public', filename);
+    try {
+      content = fs.readFileSync(fullPath, 'utf8');
+    } catch (err) {
+      console.warn(`[FETCH] No se pudo cargar ${filename}: ${err.message}`);
+      content = '';
+      status = 404;
+    }
   }
-});
+
+  return { content, status };
+}
 
 // -------------------- HELPERS --------------------
-function sendHtml(res, filename) {
-  const html = htmlCache[filename] || '';
+async function sendHtml(res, filename) {
+  const { content, status } = await getHtmlContent(filename);
   res.setHeader('Content-Type', 'text/html');
-  res.send(html);
+  res.status(status).send(content);
 }
 
 // -------------------- RUTAS --------------------
 
 // Raíz
-router.get('/', (req, res) => {
-  sendHtml(res, 'index.html');
+router.get('/', async (req, res) => {
+  await sendHtml(res, 'index.html');
 });
 
 // Screenshots / Images
@@ -64,22 +83,21 @@ router.get('/player/:id/:ep', async (req, res) => {
       <meta property="og:image:height" content="630">
     `;
 
-    // Obtenemos el HTML de player.html desde la caché e inyectamos los meta tags
-    const baseHtml = htmlCache['player.html'] || '';
+    const { content: baseHtml, status } = await getHtmlContent('player.html');
     const html = baseHtml.replace('</head>', `${metaTags}\n</head>`);
 
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.status(status).send(html);
   } catch (err) {
     console.error('[ERROR] /player/:id/:ep:', err.message);
     // Si algo falla, como fallback podemos enviar el HTML limpio sin meta tags para no romper la app
-    sendHtml(res, 'player.html');
+    await sendHtml(res, 'player.html');
   }
 });
 
-router.get('/app', (req, res) => sendHtml(res, 'app.html'));
+router.get('/app', async (req, res) => await sendHtml(res, 'app.html'));
 // Privacy policy
-router.get('/privacy-policy.html', (req, res) => sendHtml(res, 'privacy-policy.html'));
+router.get('/privacy-policy.html', async (req, res) => await sendHtml(res, 'privacy-policy.html'));
 
 // App share con meta tags dinámicos
 router.get('/app/share', async (req, res) => {
@@ -101,9 +119,11 @@ router.get('/app/share', async (req, res) => {
       <meta property="og:image:height" content="370">
     `;
 
-    const html = htmlCache['app_redir.html'].replace('</head>', `${metaTags}\n</head>`);
+    const { content: baseHtml, status } = await getHtmlContent('app_redir.html');
+    const html = baseHtml.replace('</head>', `${metaTags}\n</head>`);
+    
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.status(status).send(html);
   } catch (err) {
     console.error('[ERROR] /app/share:', err.message);
     res.status(500).send('Error interno');

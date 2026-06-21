@@ -3,6 +3,7 @@ console.log('[INFO] Iniciando aplicación AnyExt...');
 
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ quiet: true });
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
@@ -18,19 +19,60 @@ require('express-ws')(app);
 console.log('[INFO] WebSocket configurado');
 
 // Middleware Global
-app.use(favicon(path.join(__dirname, '..', 'public', 'img', 'favicon.png')));
+app.use(favicon(path.join(__dirname, '..', 'public', 'favicon.png')));
 app.use(cors({ origin: (o, cb) => cb(null, true), credentials: true }));
 app.use(cookieParser());
 app.use(express.json());
 
 // Configuración de Archivos Estáticos
-const staticPaths = [
-    { route: '/static', folder: 'static' },
-    { route: '/img', folder: 'img' }
-];
+const STATIC_SERVER_URL = process.env.STATIC_SERVER_URL;
 
-staticPaths.forEach(({ route, folder }) => {
-    app.use(route, express.static(path.join(__dirname, '..', 'public', folder)));
+if (STATIC_SERVER_URL) {
+    console.log(`[INFO] Proxy para estáticos activado hacia: ${STATIC_SERVER_URL}`);
+    const axios = require('axios');
+    const proxyMiddleware = async (req, res, next) => {
+        try {
+            const url = `${STATIC_SERVER_URL}${req.originalUrl}`;
+            const response = await axios({
+                method: req.method,
+                url: url,
+                responseType: 'stream',
+                validateStatus: () => true
+            });
+            res.status(response.status);
+            for (const [key, value] of Object.entries(response.headers)) {
+                res.setHeader(key, value);
+            }
+            response.data.pipe(res);
+        } catch (error) {
+            console.error(`[ERROR] Proxy falló para ${req.originalUrl}:`, error.message);
+            next();
+        }
+    };
+    app.use('/static', proxyMiddleware);
+    app.use('/img', proxyMiddleware);
+} else {
+    const staticPaths = [
+        { route: '/static', folder: 'static' },
+        { route: '/img', folder: 'img' }
+    ];
+
+    staticPaths.forEach(({ route, folder }) => {
+        app.use(route, express.static(path.join(__dirname, '..', 'public', folder)));
+    });
+}
+
+// Middleware Fallback para archivos locales sueltos en public (ej. /styles_404.css, /404.png)
+app.use((req, res, next) => {
+    if (req.method !== 'GET') return next();
+    try {
+        const cleanUrl = req.path;
+        const localPath = path.join(__dirname, '..', 'public', cleanUrl);
+        if (fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
+            return res.status(STATIC_SERVER_URL ? 503 : 200).sendFile(localPath);
+        }
+    } catch (e) {}
+    next();
 });
 
 // ===================================================
@@ -120,7 +162,12 @@ if (isMetadataStale()) {
 // Manejo de errores 404
 app.use((req, res) => {
     console.warn(`[ERROR 404] Ruta no encontrada: ${req.originalUrl}`);
-    res.status(404).sendFile(path.join(__dirname, '..', 'public', '404.html'));
+    const fallbackPath = path.join(__dirname, '..', 'public', 'index.html');
+    if (fs.existsSync(fallbackPath)) {
+        res.status(404).sendFile(fallbackPath);
+    } else {
+        res.status(404).send('404 Not Found');
+    }
 });
 
 console.log('[INFO] App lista para recibir conexiones.');
