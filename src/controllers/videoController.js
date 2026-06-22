@@ -313,7 +313,7 @@ exports.appV = asyncHandler(async (req, res) => {
   if (ver) {
     const a = apk.find(a => a.code === Number(ver));
     if (!a) return res.status(404).json({ error: 'Versión no encontrada' });
-    const { data: s, error: se } = await supabase.storage.from('AnyExtApp').createSignedUrl(a.nombre, 60);
+    const { data: s, error: se } = await supabase.storage.from('AnyExt').createSignedUrl(a.nombre, 60);
     if (se) throw se;
     return res.json({ url: s.signedUrl, nombre: a.nombre });
   }
