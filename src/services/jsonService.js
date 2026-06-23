@@ -97,8 +97,6 @@ async function buildEpisodeUrl(anime, ep, mirror = 1) {
   const m = parseInt(mirror, 10);
   const e = parseInt(ep, 10);
 
-  console.log(`[buildEpisodeUrl] Procesando: Mirror ${m}, Ep ${e}`);
-
   if (!anime?.sources) {
     console.log('[buildEpisodeUrl] Error: El objeto anime no tiene sources');
     return null;
@@ -124,7 +122,6 @@ async function buildEpisodeUrl(anime, ep, mirror = 1) {
         if (url.includes('tioanime.com')) {
           return url.replace('/anime/', '/ver/') + `-${e}`;
         } else if (url.includes('tiohentai.com')) {
-          // ⚠️ ya viene con número al final
           return url.replace(/-\d+$/, `-${e}`);
         }
       }
@@ -189,7 +186,6 @@ async function buildEpisodeUrl(anime, ep, mirror = 1) {
       break;
   }
 
-  console.log(`[buildEpisodeUrl] No se encontró coincidencia para mirror ${m}`);
   return null;
 }
 

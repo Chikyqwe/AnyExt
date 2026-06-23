@@ -72,7 +72,6 @@ router.get('/image', image.imageProxy);
 router.get('/images/app', image.listImages);
 router.get('/images/app/:imageName', image.serveImage);
 
-module.exports = router;
 // dev
 const fs = require('fs');
 const path = require('path');

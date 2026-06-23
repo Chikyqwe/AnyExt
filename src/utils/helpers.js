@@ -217,7 +217,6 @@ const ScraperModule = (() => {
     );
 
     const totalPages = firstRes.last_page;
-    console.log(totalPages);
 
     // 🔥 3️⃣ CREAR TODAS LAS REQUESTS EN PARALELO
     const requests = [];
@@ -337,15 +336,6 @@ const ScraperModule = (() => {
     // ===============================
     // 9️⃣ RESULTADO FINAL
     // ===============================
-    console.log({
-      source: "aniyae",
-      title,
-      slug,
-      isNewEP,
-      isEnd,
-      episodes_count: episodes.length,
-      episodes
-    })
     return {
       source: "aniyae",
       title,
@@ -779,8 +769,6 @@ async function getEpisodes(url) {
     return { success: false, error: 'URL vacía' };
   }
 
-  console.log('[getEpisodes] URL:', url);
-
   try {
     const { data } = await HttpModule.axiosInstance.get(url);
     const host = new URL(url).hostname;
@@ -804,17 +792,14 @@ async function getEpisodes(url) {
     }
 
     if (/jkanime\./.test(host)) {
-      console.log("[JKAnime]");
       return ScraperModule.extractJK(url);
     }
 
     if (/aniyae\./.test(host)) {
-      console.log("[Aniyae]");
       return ScraperModule.extractAniyae(data);
     }
 
     if (/tiohentai\./.test(host)) {
-      console.log("[TioHentai]");
       return ScraperModule.extractTioHentai(data);
     }
 

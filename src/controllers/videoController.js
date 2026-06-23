@@ -72,27 +72,11 @@ async function filterV(videos) {
 }
 
 // -------- Routes --------
-
-/**
- * POST /api/play
- * Body: { type, Did, uid, ep, s, m }
- * Reemplaza a GET /api/servers + GET /api/video
- * Devuelve: mirror, servers[], Sserver, url (/api/getMedia/:mid), mid, mtype, lang, timestamp, exp
- */
 exports.play = asyncHandler(async (req, res) => {
   try {
-    let { type = 'anime', Did, uid, ep, s = 'auto', m = 'auto', mirror, refresh } = req.body;
+    let { type = 'anime', Did, uid, ep, s = 'auto', m, refresh, Os = false } = req.body;
     uid = uid ? parseInt(uid) : undefined;
     ep = ep ? parseInt(ep) : undefined;
-
-    if (m !== 'auto' && m !== '') {
-      mirror = parseInt(m) || 1;
-    } else if (mirror !== undefined && mirror !== 'auto' && mirror !== '') {
-      mirror = parseInt(mirror) || 1;
-    } else {
-      mirror = 1;
-    }
-    const force = refresh === true || refresh === 'true';
 
     if (!uid) return res.status(400).json({ error: true, message: 'uid obligatorio' });
     if (!ep) return res.status(400).json({ error: true, message: 'ep obligatorio' });
@@ -100,64 +84,83 @@ exports.play = asyncHandler(async (req, res) => {
     const anime = getAnimeByUnitId(uid);
     if (!anime?.unit_id) return res.status(404).json({ error: true, message: 'Anime no encontrado' });
 
-    const episodeUrl = await buildEpisodeUrl(anime, ep, mirror);
-    if (!episodeUrl) return res.status(404).json({ error: true, message: 'No se pudo construir URL del episodio' });
+    const isAutoMirror = m === 'auto' || !m || m === '';
+    const mirrorsToTry = isAutoMirror ? [1, 2, 3] : [parseInt(m) || 1];
 
-    const vids = await extractAllVideoLinks(episodeUrl);
-    if (!vids || vids.status >= 700) {
-      return res.status(404).json({ error: true, message: vids?.mjs || 'Error extractor' });
+    let valid = [];
+    let finalMirror = 1;
+    const force = refresh === true || refresh === 'true';
+
+    for (const currentMirror of mirrorsToTry) {
+      const episodeUrl = await buildEpisodeUrl(anime, ep, currentMirror);
+      if (!episodeUrl) continue;
+
+      const vids = await extractAllVideoLinks(episodeUrl);
+      if (!vids || vids.status >= 700) continue;
+
+      const filtered = await filterV(vids);
+      if (filtered && filtered.length > 0) {
+        valid = filtered;
+        finalMirror = currentMirror;
+        break;
+      }
     }
 
-    const valid = await filterV(vids);
-    if (!valid.length) return res.status(404).json({ error: true, message: 'No hay servidores válidos' });
-
-    // Selección de servidor
+    if (!valid.length) {
+      return res.status(404).json({ error: true, message: 'No hay servidores válidos en ningún mirror' });
+    }
+    
     const normalizedS = s !== 'auto' ? norm(s) : null;
     const sel = normalizedS ? valid.find(v => v.servidor === normalizedS) ?? valid[0] : valid[0];
-
     const serverNames = valid.map(v => v.servidor);
     const now = Math.floor(Date.now() / 1000);
+    
+    if (!Os) {
+      // Servidores HLS
+      if (['sw', 'voe', 'streamwish'].includes(sel.servidor)) {
+        const { mid, Rc } = await getVid(sel.servidor, sel.url, null, force);
+        return res.json({
+          type,
+          mirror: finalMirror,
+          servers: serverNames,
+          Sserver: sel.servidor,
+          url: `/api/getMedia/${mid}`,
+          mid,
+          lang: 'sub',
+          mtype: 'hls',
+          timestamp: now,
+          exp: now + 15 * 60,
+        });
+      }
 
-    // Servidores HLS — devolver mid para /api/getMedia/:mid
-    if (['sw', 'voe', 'streamwish'].includes(sel.servidor)) {
-      const { mid, Rc } = await getVid(sel.servidor, sel.url, null, force);
+      const ex = getExtractor(sel.servidor);
+      const r = await ex(sel.url);
+      if (!r || r.status >= 700) {
+        return res.status(404).json({ error: true, message: r?.mjs || 'Error extractor' });
+      }
+
+      if (r.url) {
+        const mid = generateKey(r.url);
+        cache.save(mid, r.url);
+        return res.json({
+          type,
+          mirror: finalMirror,
+          servers: serverNames,
+          Sserver: sel.servidor,
+          url: `/api/getMedia/${mid}`,
+          mid,
+          lang: 'sub',
+          mtype: 'mp4',
+          timestamp: now,
+          exp: now + 15 * 60,
+        });
+      }
+    } else {
       return res.json({
         type,
-        mirror,
+        mirror: finalMirror,
         servers: serverNames,
-        Sserver: sel.servidor,
-        url: `/api/getMedia/${mid}`,
-        mid,
-        lang: 'sub',
-        mtype: 'hls',
-        timestamp: now,
-        exp: now + 15 * 60,
-      });
-    }
-
-    // Servidores MP4 directos
-    const ex = getExtractor(sel.servidor);
-    const r = await ex(sel.url);
-    if (!r || r.status >= 700) {
-      return res.status(404).json({ error: true, message: r?.mjs || 'Error extractor' });
-    }
-
-    if (r.url) {
-      const mid = generateKey(r.url);
-      // Guardamos la url directa en cache para que /api/getMedia/:mid la devuelva
-      cache.save(mid, r.url);
-      return res.json({
-        type,
-        mirror,
-        servers: serverNames,
-        Sserver: sel.servidor,
-        url: `/api/getMedia/${mid}`,
-        mid,
-        lang: 'sub',
-        mtype: 'mp4',
-        timestamp: now,
-        exp: now + 15 * 60,
-      });
+      })
     }
 
     return res.status(500).json({ error: true, message: 'Formato no reconocido' });
@@ -167,12 +170,6 @@ exports.play = asyncHandler(async (req, res) => {
   }
 });
 
-/**
- * GET /api/getMedia/:p
- * Reemplaza a GET /api/get/hls/:uuid
- * Case 1: el mid apunta a contenido M3U8  → devuelve el m3u8 directo
- * Case 2: el mid apunta a una URL de video → devuelve { url: "/api/stream?gid=..." }
- */
 exports.getMedia = asyncHandler(async (req, res) => {
   const mid = req.params.p;
   if (!cache.exists(mid)) {
@@ -181,7 +178,6 @@ exports.getMedia = asyncHandler(async (req, res) => {
 
   const content = cache.load(mid);
 
-  // Si el contenido comienza con http y NO tiene saltos de línea → es una URL directa (MP4)
   if (typeof content === 'string' && content.startsWith('http') && !content.includes('\n')) {
     const base = `${HTTPS ? 'https' : 'http'}://${req.get('host')}`;
     return res.json({
@@ -189,18 +185,12 @@ exports.getMedia = asyncHandler(async (req, res) => {
     });
   }
 
-  // Contenido M3U8
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Access-Control-Allow-Origin', '*');
   return res.send(content);
 });
 
-/**
- * GET /api/stream?gid=<videoUrl o hash>
- * Renombrado desde ?videoUrl= → ?gid=
- * Mantiene compatibilidad con ?videoUrl= por retrocompatibilidad
- */
 exports.stream = asyncHandler(async (req, res) => {
   const v = req.query.gid || req.query.v;
   if (!v) return res.status(400).json({ error: 'Falta parámetro "?gid" o "?v"' });
@@ -216,17 +206,13 @@ exports.stream = asyncHandler(async (req, res) => {
   streamVideo(targetUrl, req, res);
 });
 
-/**
- * GET /api/req?u=<url>&h=<headers JSON>
- * Renombrado desde ?url= → ?u=, agrega soporte de headers custom
- */
 exports.reqProxy = asyncHandler(async (req, res) => {
-  const u = req.query.u || req.query.url; // retrocompat
+  const u = req.query.u || req.query.url;
   if (!u) return res.status(400).json({ error: 'Falta parámetro u' });
 
   let extraHeaders = {};
   if (req.query.h) {
-    try { extraHeaders = JSON.parse(req.query.h); } catch { /* headers inválidos, ignorar */ }
+    try { extraHeaders = JSON.parse(req.query.h); } catch {}
   }
 
   try {
@@ -241,10 +227,6 @@ exports.reqProxy = asyncHandler(async (req, res) => {
   }
 });
 
-/**
- * GET /api/proxy?url=<ts url>&ref=<referer>
- * Renombrado desde /api/hlsProxy → /api/proxy (misma lógica, mismo nombre de params)
- */
 exports.proxy = asyncHandler(async (req, res) => {
   let u = req.query.url;
   if (!u && req.query.gid) {
@@ -275,7 +257,7 @@ exports.proxy = asyncHandler(async (req, res) => {
   });
 });
 
-// -------- Misc (sin cambios de contrato) --------
+// -------- Misc --------
 
 exports.download = (req, res) => downloadVideo(req, res);
 
@@ -322,8 +304,7 @@ exports.appV = asyncHandler(async (req, res) => {
   res.json({ actual: apk[0] || null, anterior: apk[1] || null, anteriores: apk.slice(2) });
 });
 
-// -------- TS stream cleaner (sin cambios) --------
-
+// -------- TS stream cleaner--------
 const createVideoCleaner = () => {
   let buffer = Buffer.alloc(0);
   let synced = false;

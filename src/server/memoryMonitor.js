@@ -4,7 +4,7 @@ const SendEmail = require('../services/emailService');
 const { warn, error } = require('./logger');
 
 const MEM_LIMIT_GC = 360 * 1024 * 1024;
-const MEM_LIMIT_RESTART = 430 * 1024 * 1024;
+const MEM_LIMIT_RESTART = 495 * 1024 * 1024;
 
 let reportando = false;
 

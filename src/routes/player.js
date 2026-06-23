@@ -24,8 +24,6 @@ router.get('/api/player', async (req, res) => {
   const animeId = parseInt(req.query.id, 10);
   const ep = parseInt(req.query.ep, 10);
 
-  console.log("[API PLAYER]", !isNaN(animeId) ? `id=${animeId}` : `uid=${uid}`, "ep=", ep);
-
   if ((isNaN(animeId) && isNaN(uid)) || isNaN(ep)) {
     return res.status(400).json({ error: "Parámetros id/uid o ep inválidos" });
   }
@@ -34,7 +32,6 @@ router.get('/api/player', async (req, res) => {
     const animeData = !isNaN(animeId)
       ? getAnimeById(animeId)
       : getAnimeByUnitId(uid);
-    console.log(animeData);
     if (!animeData) {
       return res.status(404).json({ error: "Anime no encontrado" });
     }
