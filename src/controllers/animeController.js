@@ -74,7 +74,6 @@ function buildSearchIndex() {
   console.log(`[SEARCH] Indexed ${searchable.length} animes`);
 }
 
-// Construir índice al iniciar
 buildSearchIndex();
 
 // ─────────────────────────────────────────────
@@ -154,52 +153,51 @@ exports.info = asyncHandler(async (req, res) => {
     }
   }
 
- // ── EPISODES ──────────────────────────────
-let bestResult = {
-  episodes: [],
-  status: 'Desconocido',
-  source: null
-};
+  // ── EPISODES (Lógica mejorada para comparar mirrors) ──
+  let bestResult = {
+    episodes: [],
+    status: 'Desconocido',
+    source: null
+  };
 
-// Iteramos sobre todos los mirrors sin hacer break prematuro
-for (const mirrorKey of MIRRORS) {
-  const sourceUrl = anime.sources?.[mirrorKey];
-  if (!sourceUrl) continue;
+  for (const mirrorKey of MIRRORS) {
+    const sourceUrl = anime.sources?.[mirrorKey];
+    if (!sourceUrl) continue;
 
-  try {
-    const raw = await getEpisodes(sourceUrl);
-    if (!raw?.episodes?.length) continue;
+    try {
+      const raw = await getEpisodes(sourceUrl);
+      if (!raw?.episodes?.length) continue;
 
-    // Si este mirror tiene más episodios que el que hemos guardado, lo reemplazamos
-    if (raw.episodes.length > bestResult.episodes.length) {
-      bestResult = {
-        episodes: raw.episodes.map(ep => ({
-          num: Number(ep.number),
-          url: `/player/${uid}/${ep.number}`,
-        })),
-        status: Boolean(raw.isEnd) ? 'Finalizado' : 'En emisión',
-        source: mirrorKey
-      };
+      // Comparamos si este mirror tiene más episodios que el mejor encontrado hasta ahora
+      if (raw.episodes.length > bestResult.episodes.length) {
+        bestResult = {
+          episodes: raw.episodes.map(ep => ({
+            num: Number(ep.number),
+            url: `/player/${uid}/${ep.number}`,
+          })),
+          status: Boolean(raw.isEnd) ? 'Finalizado' : 'En emisión',
+          source: mirrorKey
+        };
+      }
+    } catch (err) {
+      console.warn(`[info/eps] ${mirrorKey}: ${err.message}`);
     }
-  } catch (err) {
-    console.warn(`[info/eps] ${mirrorKey}: ${err.message}`);
   }
-}
 
-// Usamos el mejor resultado encontrado
-res.json({
-  type: 'anime',
-  title: anime.title,
-  slug: anime.slug,
-  category: anime.category || 'anime',
-  eps: bestResult.episodes.length,
-  desc: description || '',
-  tags: anime.tags || [],
-  status: bestResult.status,
-  episodes: bestResult.episodes,
-  uid,
-  image: anime.image || '',
-  source: bestResult.source || '',
+  res.json({
+    type: 'anime',
+    title: anime.title,
+    slug: anime.slug,
+    category: anime.category || 'anime',
+    eps: bestResult.episodes.length,
+    desc: description || '',
+    tags: anime.tags || [],
+    status: bestResult.status,
+    episodes: bestResult.episodes,
+    uid,
+    image: anime.image || '',
+    source: bestResult.source || '',
+  });
 });
 
 // ─────────────────────────────────────────────
@@ -237,7 +235,6 @@ exports.img = asyncHandler(async (req, res) => {
     return res.status(404).json({ error: `Anime uid=${uid} no encontrado` });
   }
 
-  // ── COVER ─────────────────────────────────
   if (type === 'cover') {
     const imageUrl = anime.image || anime.cover;
     if (!imageUrl) {
@@ -246,7 +243,6 @@ exports.img = asyncHandler(async (req, res) => {
     return proxyImage(imageUrl, res);
   }
 
-  // ── EP IMAGE ──────────────────────────────
   if (type === 'ep') {
     const epNum = parseInt(ep);
     if (!epNum) return res.status(400).json({ error: 'Falta ep' });
@@ -265,7 +261,6 @@ exports.img = asyncHandler(async (req, res) => {
       } catch { }
     }
 
-    // Fallback
     const fallback = anime.image || anime.cover;
     if (fallback) {
       return proxyImage(fallback, res);
@@ -277,7 +272,6 @@ exports.img = asyncHandler(async (req, res) => {
   return res.status(400).json({ error: `type inválido: ${type}` });
 });
 
-// ROKU APP
 exports.rokuimg = (req, res) => {
   const { uid } = req.query;
   const anime = getAnimeByUnitId(parseInt(uid));
@@ -305,62 +299,44 @@ exports.search = asyncHandler(async (req, res) => {
   }
 
   let results = [];
-  let limit = 20; // Límite por defecto para búsqueda normal
+  let limit = 20;
 
   const match = query.trim().match(/^:\$([\w.]+):(.+)$/);
 
   if (match) {
-    // Si es búsqueda avanzada, quitamos el límite (puedes poner Infinity o un número muy alto)
     limit = Infinity;
-
     const [, keyPath, rawValue] = match;
     const targetValue = rawValue.trim().toLowerCase();
-    // Filtrar directamente en el array 'searchable'
+    
     const filtered = searchable.filter(anime => {
-
-      // Función auxiliar que ignora mayúsculas/minúsculas en las llaves del JSON
       const getValueByPath = (obj, path) => {
         return path.split('.').reduce((acc, part) => {
           if (!acc) return undefined;
-
-          // Buscar una llave que coincida ignorando mayúsculas/minúsculas
           const targetKey = Object.keys(acc).find(
             k => k.toLowerCase() === part.toLowerCase()
           );
-
           return targetKey ? acc[targetKey] : undefined;
         }, obj);
       };
 
       const animeVal = getValueByPath(anime, keyPath);
-
       if (animeVal === undefined || animeVal === null) return false;
-
       if (typeof animeVal === 'number') {
         return animeVal === Number(rawValue.trim());
       }
-
       return String(animeVal).toLowerCase() === targetValue;
     });
 
-    // Mapear al formato interno de resultados
-    results = filtered.map(anime => ({
-      item: anime,
-      score: 0
-    }));
-
+    results = filtered.map(anime => ({ item: anime, score: 0 }));
   } else {
-    // 2. BÚSQUEDA NORMAL (Fuse.js + Jikan API)
     const term = normalize(query);
     results = fuse.search(term);
 
     try {
       const response = await fetch(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(term)}&limit=10`);
-
       if (response.ok) {
         const json = await response.json();
         const aliases = [];
-
         for (const anime of json.data) {
           if (!anime.title) continue;
           const n = normalize(anime.title);
@@ -368,7 +344,6 @@ exports.search = asyncHandler(async (req, res) => {
             aliases.push(n);
           }
         }
-
         for (const alias of aliases) {
           const exactMatches = searchable.filter(a => a.normalizedTitle === alias);
           for (const anime of exactMatches) {
@@ -381,15 +356,10 @@ exports.search = asyncHandler(async (req, res) => {
     }
   }
 
-  // ─────────────────────────────────────────
-  // DEDUPE + SORT (Aplica para ambos flujos)
-  // ─────────────────────────────────────────
   const unique = new Map();
-
   for (const r of results) {
     const id = Number(r.item.unit_id);
     const current = unique.get(id);
-
     if (!current || r.score < current.score) {
       unique.set(id, r);
     }
@@ -409,18 +379,10 @@ exports.search = asyncHandler(async (req, res) => {
   res.json(finalResults);
 });
 
-// ─────────────────────────────────────────────
-// OPTIONAL: REBUILD SEARCH INDEX
-// ─────────────────────────────────────────────
-
 exports.rebuildSearch = asyncHandler(async (req, res) => {
   buildSearchIndex();
   res.json({ success: true, indexed: searchable.length });
 });
-
-// ─────────────────────────────────────────────
-// INIT
-// ─────────────────────────────────────────────
 
 exports.initmjs = asyncHandler(async (req, res) => {
   res.json({
