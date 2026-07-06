@@ -154,48 +154,52 @@ exports.info = asyncHandler(async (req, res) => {
     }
   }
 
-  // ── EPISODES ──────────────────────────────
-  let episodes = [];
-  let status = null;
-  let source = null;
+ // ── EPISODES ──────────────────────────────
+let bestResult = {
+  episodes: [],
+  status: 'Desconocido',
+  source: null
+};
 
-  for (const mirrorKey of MIRRORS) {
-    const sourceUrl = anime.sources?.[mirrorKey];
-    if (!sourceUrl) continue;
+// Iteramos sobre todos los mirrors sin hacer break prematuro
+for (const mirrorKey of MIRRORS) {
+  const sourceUrl = anime.sources?.[mirrorKey];
+  if (!sourceUrl) continue;
 
-    try {
-      const raw = await getEpisodes(sourceUrl);
-      if (!raw?.episodes?.length) continue;
+  try {
+    const raw = await getEpisodes(sourceUrl);
+    if (!raw?.episodes?.length) continue;
 
-      const isEnd = Boolean(raw.isEnd);
-      status = isEnd ? 'Finalizado' : 'En emisión';
-      source = mirrorKey;
-
-      episodes = raw.episodes.map(ep => ({
-        num: Number(ep.number),
-        url: `/player/${uid}/${ep.number}`,
-      }));
-
-      break;
-    } catch (err) {
-      console.warn(`[info/eps] ${mirrorKey}: ${err.message}`);
+    // Si este mirror tiene más episodios que el que hemos guardado, lo reemplazamos
+    if (raw.episodes.length > bestResult.episodes.length) {
+      bestResult = {
+        episodes: raw.episodes.map(ep => ({
+          num: Number(ep.number),
+          url: `/player/${uid}/${ep.number}`,
+        })),
+        status: Boolean(raw.isEnd) ? 'Finalizado' : 'En emisión',
+        source: mirrorKey
+      };
     }
+  } catch (err) {
+    console.warn(`[info/eps] ${mirrorKey}: ${err.message}`);
   }
+}
 
-  res.json({
-    type: 'anime',
-    title: anime.title,
-    slug: anime.slug,
-    category: anime.category || 'anime',
-    eps: episodes.length,
-    desc: description || '',
-    tags: anime.tags || [],
-    status: status || 'Desconocido',
-    episodes,
-    uid,
-    image: anime.image || '',
-    source: source || '',
-  });
+// Usamos el mejor resultado encontrado
+res.json({
+  type: 'anime',
+  title: anime.title,
+  slug: anime.slug,
+  category: anime.category || 'anime',
+  eps: bestResult.episodes.length,
+  desc: description || '',
+  tags: anime.tags || [],
+  status: bestResult.status,
+  episodes: bestResult.episodes,
+  uid,
+  image: anime.image || '',
+  source: bestResult.source || '',
 });
 
 // ─────────────────────────────────────────────
