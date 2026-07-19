@@ -1,6 +1,6 @@
 {
   "name": "anyext",
-  "version": "2.0.2",
+  "version": "2.8.0",
   "description": "Server of Anime Ext",
   "main": "main.js",
   "scripts": {

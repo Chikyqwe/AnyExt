@@ -12,8 +12,8 @@ const { default: axios } = require('axios');
 const { HTTPS } = require('../config');
 
 const { extractAllVideoLinks, getExtractor } = require('../core/core');
-const { getJSONPath, getAnimeByUnitId, buildEpisodeUrl } = require('../services/jsonService');
-const { proxyImage, streamVideo, downloadVideo, validateVideoUrl } = require('../utils/helpers');
+const { getAnimeByUnitId, buildEpisodeUrl } = require('../services/jsonService');
+const { streamVideo, downloadVideo } = require('../utils/helpers');
 const { parseMegaUrl, verificarArchivoMega } = require('../utils/CheckMega');
 
 const cache = new TextCache({ ttlMs: 15 * 60 * 1000 });
@@ -81,6 +81,84 @@ exports.play = asyncHandler(async (req, res) => {
     if (!uid) return res.status(400).json({ error: true, message: 'uid obligatorio' });
     if (!ep) return res.status(400).json({ error: true, message: 'ep obligatorio' });
 
+    if (type === 'manga') {
+      const { getMangaByUnitId } = require('../services/jsonService');
+      const { getEpisodes } = require('../utils/helpers');
+      
+      const manga = getMangaByUnitId(uid);
+      if (!manga?.unit_id) return res.status(404).json({ error: true, message: 'Manga no encontrado' });
+      
+      const isAutoMirror = m === 'auto' || !m || m === '';
+      const mirrorsToTry = isAutoMirror 
+        ? Object.keys(manga.sources || {}).filter(k => manga.sources[k]) 
+        : [m];
+
+      if (mirrorsToTry.length === 0) {
+        return res.status(404).json({ error: true, message: 'No hay mirrors disponibles' });
+      }
+
+      let validImgs = null;
+      let finalMirror = null;
+      let mid = null;
+
+      for (const mirrorKey of mirrorsToTry) {
+        const sourceUrl = manga.sources?.[mirrorKey];
+        if (!sourceUrl) continue;
+        
+        let raw;
+        try {
+          raw = await getEpisodes(sourceUrl);
+        } catch (e) {
+          continue;
+        }
+        
+        if (raw && !raw.chapters && raw.episodes) raw.chapters = raw.episodes;
+        if (!raw?.chapters) continue;
+        
+        const chapter = raw.chapters.find(c => Number(c.num || c.number) === ep);
+        if (!chapter) continue;
+        
+        let coreExtractorName = mirrorKey;
+        if (mirrorKey === 'olympusxyz') coreExtractorName = 'oly';
+        if (mirrorKey === 'mangalect' || mirrorKey === 'lectesp') coreExtractorName = 'esp';
+        if (mirrorKey === 'zonatmo') coreExtractorName = 'tmonet';
+        
+        const ex = getExtractor(coreExtractorName);
+        if (!ex) continue;
+        
+        try {
+          const imgs = await ex(chapter.url);
+          if (imgs && imgs.length > 0) {
+            validImgs = imgs;
+            finalMirror = mirrorKey;
+            mid = generateKey(chapter.url);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+
+      if (!validImgs) {
+        return res.status(404).json({ error: true, message: 'No se encontraron imágenes en los mirrors probados' });
+      }
+
+      cache.save(mid, JSON.stringify(validImgs));
+      
+      const now = Math.floor(Date.now() / 1000);
+      return res.json({
+        type: 'manga',
+        mirror: finalMirror,
+        servers: [finalMirror],
+        Sserver: finalMirror,
+        url: `/api/getMedia/${mid}`,
+        mid,
+        mtype: 'json',
+        timestamp: now,
+        exp: now + 15 * 60,
+      });
+    }
+
     const anime = getAnimeByUnitId(uid);
     if (!anime?.unit_id) return res.status(404).json({ error: true, message: 'Anime no encontrado' });
 
@@ -109,12 +187,12 @@ exports.play = asyncHandler(async (req, res) => {
     if (!valid.length) {
       return res.status(404).json({ error: true, message: 'No hay servidores válidos en ningún mirror' });
     }
-    
+
     const normalizedS = s !== 'auto' ? norm(s) : null;
     const sel = normalizedS ? valid.find(v => v.servidor === normalizedS) ?? valid[0] : valid[0];
     const serverNames = valid.map(v => v.servidor);
     const now = Math.floor(Date.now() / 1000);
-    
+
     if (!Os) {
       // Servidores HLS
       if (['sw', 'voe', 'streamwish'].includes(sel.servidor)) {
@@ -185,6 +263,13 @@ exports.getMedia = asyncHandler(async (req, res) => {
     });
   }
 
+  if (typeof content === 'string' && (content.startsWith('[') || content.startsWith('{'))) {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return res.send(content);
+  }
+
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -212,7 +297,7 @@ exports.reqProxy = asyncHandler(async (req, res) => {
 
   let extraHeaders = {};
   if (req.query.h) {
-    try { extraHeaders = JSON.parse(req.query.h); } catch {}
+    try { extraHeaders = JSON.parse(req.query.h); } catch { }
   }
 
   try {

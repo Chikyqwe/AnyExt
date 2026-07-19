@@ -1,0 +1,627 @@
+{
+    "16": {
+        "name": "Romance",
+        "slug": "romance",
+        "tax": "manga_genre"
+    },
+    "4": {
+        "name": "Comedia",
+        "slug": "comedia",
+        "tax": "manga_genre"
+    },
+    "15": {
+        "name": "Drama",
+        "slug": "drama",
+        "tax": "manga_genre"
+    },
+    "5": {
+        "name": "Fantasia",
+        "slug": "fantasia",
+        "tax": "manga_genre"
+    },
+    "2": {
+        "name": "Acci\u00f3n",
+        "slug": "accion",
+        "tax": "manga_genre"
+    },
+    "103": {
+        "name": "Boys Love",
+        "slug": "boys-love",
+        "tax": "manga_genre"
+    },
+    "33": {
+        "name": "Recuentos de la vida",
+        "slug": "recuentos-de-la-vida",
+        "tax": "manga_genre"
+    },
+    "23": {
+        "name": "Vida Escolar",
+        "slug": "vida-escolar",
+        "tax": "manga_genre"
+    },
+    "3": {
+        "name": "Aventura",
+        "slug": "aventura",
+        "tax": "manga_genre"
+    },
+    "32": {
+        "name": "Ecchi",
+        "slug": "ecchi",
+        "tax": "manga_genre"
+    },
+    "7": {
+        "name": "Sobrenatural",
+        "slug": "sobrenatural",
+        "tax": "manga_genre"
+    },
+    "60": {
+        "name": "Reencarnaci\u00f3n",
+        "slug": "reencarnacion",
+        "tax": "manga_genre"
+    },
+    "8": {
+        "name": "Harem",
+        "slug": "harem",
+        "tax": "manga_genre"
+    },
+    "6": {
+        "name": "Magia",
+        "slug": "magia",
+        "tax": "manga_genre"
+    },
+    "36": {
+        "name": "Psicol\u00f3gico",
+        "slug": "psicologico",
+        "tax": "manga_genre"
+    },
+    "40": {
+        "name": "Misterio",
+        "slug": "misterio",
+        "tax": "manga_genre"
+    },
+    "26": {
+        "name": "Artes Marciales",
+        "slug": "artes-marciales",
+        "tax": "manga_genre"
+    },
+    "21": {
+        "name": "Ciencia Ficci\u00f3n",
+        "slug": "ciencia-ficcion",
+        "tax": "manga_genre"
+    },
+    "22": {
+        "name": "Girls Love",
+        "slug": "girls-love",
+        "tax": "manga_genre"
+    },
+    "46": {
+        "name": "Tragedia",
+        "slug": "tragedia",
+        "tax": "manga_genre"
+    },
+    "81": {
+        "name": "Historia",
+        "slug": "historia",
+        "tax": "manga_genre"
+    },
+    "88": {
+        "name": "Demonios",
+        "slug": "demonios",
+        "tax": "manga_genre"
+    },
+    "116": {
+        "name": "Superpoderes",
+        "slug": "superpoderes",
+        "tax": "manga_genre"
+    },
+    "82": {
+        "name": "Horror",
+        "slug": "horror",
+        "tax": "manga_genre"
+    },
+    "112": {
+        "name": "Supervivencia",
+        "slug": "supervivencia",
+        "tax": "manga_genre"
+    },
+    "181": {
+        "name": "Gore",
+        "slug": "gore",
+        "tax": "manga_genre"
+    },
+    "1027": {
+        "name": "Familia",
+        "slug": "familia",
+        "tax": "manga_genre"
+    },
+    "183": {
+        "name": "G\u00e9nero Bender",
+        "slug": "genero-bender",
+        "tax": "manga_genre"
+    },
+    "861": {
+        "name": "Apocal\u00edptico",
+        "slug": "apocaliptico",
+        "tax": "manga_genre"
+    },
+    "41": {
+        "name": "Crimen",
+        "slug": "crimen",
+        "tax": "manga_genre"
+    },
+    "49": {
+        "name": "Thriller",
+        "slug": "thriller",
+        "tax": "manga_genre"
+    },
+    "37": {
+        "name": "Deporte",
+        "slug": "deporte",
+        "tax": "manga_genre"
+    },
+    "147": {
+        "name": "Realidad",
+        "slug": "realidad",
+        "tax": "manga_genre"
+    },
+    "342": {
+        "name": "Militar",
+        "slug": "militar",
+        "tax": "manga_genre"
+    },
+    "1109": {
+        "name": "Guerra",
+        "slug": "guerra",
+        "tax": "manga_genre"
+    },
+    "820": {
+        "name": "Parodia",
+        "slug": "parodia",
+        "tax": "manga_genre"
+    },
+    "345": {
+        "name": "Vampiros",
+        "slug": "vampiros",
+        "tax": "manga_genre"
+    },
+    "403": {
+        "name": "Musica",
+        "slug": "musica",
+        "tax": "manga_genre"
+    },
+    "219": {
+        "name": "Ni\u00f1os",
+        "slug": "ninos",
+        "tax": "manga_genre"
+    },
+    "27": {
+        "name": "Realidad Virtual",
+        "slug": "realidad-virtual",
+        "tax": "manga_genre"
+    },
+    "144": {
+        "name": "Mecha",
+        "slug": "mecha",
+        "tax": "manga_genre"
+    },
+    "111": {
+        "name": "Policiaco",
+        "slug": "policiaco",
+        "tax": "manga_genre"
+    },
+    "470": {
+        "name": "Telenovela",
+        "slug": "telenovela",
+        "tax": "manga_genre"
+    },
+    "12868": {
+        "name": "Sistema de Niveles",
+        "slug": "sistema-de-niveles",
+        "tax": "manga_genre"
+    },
+    "99": {
+        "name": "Samur\u00e1i",
+        "slug": "samurai",
+        "tax": "manga_genre"
+    },
+    "6198": {
+        "name": "Animaci\u00f3n",
+        "slug": "animacion",
+        "tax": "manga_genre"
+    },
+    "356": {
+        "name": "Ciberpunk",
+        "slug": "ciberpunk",
+        "tax": "manga_genre"
+    },
+    "1168": {
+        "name": "Extranjero",
+        "slug": "extranjero",
+        "tax": "manga_genre"
+    },
+    "12915": {
+        "name": "Academia",
+        "slug": "academia",
+        "tax": "manga_genre"
+    },
+    "12891": {
+        "name": "Venganza",
+        "slug": "venganza",
+        "tax": "manga_genre"
+    },
+    "1145": {
+        "name": "2020",
+        "slug": "2020",
+        "tax": "manga_years"
+    },
+    "1674": {
+        "name": "2021",
+        "slug": "2021",
+        "tax": "manga_years"
+    },
+    "3639": {
+        "name": "2022",
+        "slug": "2022",
+        "tax": "manga_years"
+    },
+    "1098": {
+        "name": "2019",
+        "slug": "2019",
+        "tax": "manga_years"
+    },
+    "25": {
+        "name": "2016",
+        "slug": "2016",
+        "tax": "manga_years"
+    },
+    "1182": {
+        "name": "2018",
+        "slug": "2018",
+        "tax": "manga_years"
+    },
+    "2040": {
+        "name": "2017",
+        "slug": "2017",
+        "tax": "manga_years"
+    },
+    "3523": {
+        "name": "2023",
+        "slug": "2023",
+        "tax": "manga_years"
+    },
+    "6113": {
+        "name": "2024",
+        "slug": "2024",
+        "tax": "manga_years"
+    },
+    "63": {
+        "name": "2015",
+        "slug": "2015",
+        "tax": "manga_years"
+    },
+    "11": {
+        "name": "2014",
+        "slug": "2014",
+        "tax": "manga_years"
+    },
+    "30": {
+        "name": "2013",
+        "slug": "2013",
+        "tax": "manga_years"
+    },
+    "43": {
+        "name": "2012",
+        "slug": "2012",
+        "tax": "manga_years"
+    },
+    "35": {
+        "name": "2011",
+        "slug": "2011",
+        "tax": "manga_years"
+    },
+    "5724": {
+        "name": "2025",
+        "slug": "2025",
+        "tax": "manga_years"
+    },
+    "52": {
+        "name": "2009",
+        "slug": "2009",
+        "tax": "manga_years"
+    },
+    "58": {
+        "name": "2010",
+        "slug": "2010",
+        "tax": "manga_years"
+    },
+    "94": {
+        "name": "2008",
+        "slug": "2008",
+        "tax": "manga_years"
+    },
+    "66": {
+        "name": "2007",
+        "slug": "2007",
+        "tax": "manga_years"
+    },
+    "70": {
+        "name": "2006",
+        "slug": "2006",
+        "tax": "manga_years"
+    },
+    "318": {
+        "name": "1998",
+        "slug": "1998",
+        "tax": "manga_years"
+    },
+    "98": {
+        "name": "2005",
+        "slug": "2005",
+        "tax": "manga_years"
+    },
+    "78": {
+        "name": "2004",
+        "slug": "2004",
+        "tax": "manga_years"
+    },
+    "1781": {
+        "name": "2037",
+        "slug": "2037",
+        "tax": "manga_years"
+    },
+    "143": {
+        "name": "1997",
+        "slug": "1997",
+        "tax": "manga_years"
+    },
+    "124": {
+        "name": "2003",
+        "slug": "2003",
+        "tax": "manga_years"
+    },
+    "92": {
+        "name": "1999",
+        "slug": "1999",
+        "tax": "manga_years"
+    },
+    "114": {
+        "name": "2002",
+        "slug": "2002",
+        "tax": "manga_years"
+    },
+    "86": {
+        "name": "2001",
+        "slug": "2001",
+        "tax": "manga_years"
+    },
+    "106": {
+        "name": "2000",
+        "slug": "2000",
+        "tax": "manga_years"
+    },
+    "18": {
+        "name": "1996",
+        "slug": "1996",
+        "tax": "manga_years"
+    },
+    "12314": {
+        "name": "2026",
+        "slug": "2026",
+        "tax": "manga_years"
+    },
+    "179": {
+        "name": "1992",
+        "slug": "1992",
+        "tax": "manga_years"
+    },
+    "752": {
+        "name": "1991",
+        "slug": "1991",
+        "tax": "manga_years"
+    },
+    "232": {
+        "name": "1990",
+        "slug": "1990",
+        "tax": "manga_years"
+    },
+    "127": {
+        "name": "1995",
+        "slug": "1995",
+        "tax": "manga_years"
+    },
+    "1051": {
+        "name": "1993",
+        "slug": "1993",
+        "tax": "manga_years"
+    },
+    "273": {
+        "name": "1994",
+        "slug": "1994",
+        "tax": "manga_years"
+    },
+    "587": {
+        "name": "1983",
+        "slug": "1983",
+        "tax": "manga_years"
+    },
+    "226": {
+        "name": "1989",
+        "slug": "1989",
+        "tax": "manga_years"
+    },
+    "544": {
+        "name": "1984",
+        "slug": "1984",
+        "tax": "manga_years"
+    },
+    "898": {
+        "name": "1988",
+        "slug": "1988",
+        "tax": "manga_years"
+    },
+    "84": {
+        "name": "1987",
+        "slug": "1987",
+        "tax": "manga_years"
+    },
+    "230": {
+        "name": "1985",
+        "slug": "1985",
+        "tax": "manga_years"
+    },
+    "448": {
+        "name": "1982",
+        "slug": "1982",
+        "tax": "manga_years"
+    },
+    "1653": {
+        "name": "1986",
+        "slug": "1986",
+        "tax": "manga_years"
+    },
+    "314": {
+        "name": "1972",
+        "slug": "1972",
+        "tax": "manga_years"
+    },
+    "1418": {
+        "name": "1980",
+        "slug": "1980",
+        "tax": "manga_years"
+    },
+    "2606": {
+        "name": "1978",
+        "slug": "1978",
+        "tax": "manga_years"
+    },
+    "547": {
+        "name": "1975",
+        "slug": "1975",
+        "tax": "manga_years"
+    },
+    "12": {
+        "name": "Public\u00e1ndose",
+        "slug": "publicandose",
+        "tax": "manga_status"
+    },
+    "19": {
+        "name": "Finalizado",
+        "slug": "finalizado",
+        "tax": "manga_status"
+    },
+    "198": {
+        "name": "Cancelado",
+        "slug": "cancelado",
+        "tax": "manga_status"
+    },
+    "174": {
+        "name": "Pausado",
+        "slug": "pausado",
+        "tax": "manga_status"
+    },
+    "12917": {
+        "name": "desconocido",
+        "slug": "desconocido",
+        "tax": "manga_status"
+    },
+    "12922": {
+        "name": "en pausa",
+        "slug": "en-pausa",
+        "tax": "manga_status"
+    },
+    "12856": {
+        "name": "En curso",
+        "slug": "en-curso",
+        "tax": "manga_status"
+    },
+    "12869": {
+        "name": "publishing",
+        "slug": "publishing",
+        "tax": "manga_status"
+    },
+    "12874": {
+        "name": "Completado",
+        "slug": "completado",
+        "tax": "manga_status"
+    },
+    "12866": {
+        "name": "OnGoing",
+        "slug": "ongoing",
+        "tax": "manga_status"
+    },
+    "13": {
+        "name": "shounen",
+        "slug": "shounen",
+        "tax": "manga_demography"
+    },
+    "20": {
+        "name": "shoujo",
+        "slug": "shoujo",
+        "tax": "manga_demography"
+    },
+    "45": {
+        "name": "seinen",
+        "slug": "seinen",
+        "tax": "manga_demography"
+    },
+    "55": {
+        "name": "josei",
+        "slug": "josei",
+        "tax": "manga_demography"
+    },
+    "633": {
+        "name": "kodomo",
+        "slug": "kodomo",
+        "tax": "manga_demography"
+    },
+    "14": {
+        "name": "MANGA",
+        "slug": "manga",
+        "tax": "manga_type"
+    },
+    "87": {
+        "name": "MANHWA",
+        "slug": "manhwa",
+        "tax": "manga_type"
+    },
+    "31": {
+        "name": "MANHUA",
+        "slug": "manhua",
+        "tax": "manga_type"
+    },
+    "214": {
+        "name": "NOVELA",
+        "slug": "novela",
+        "tax": "manga_type"
+    },
+    "207": {
+        "name": "DOUJINSHI",
+        "slug": "doujinshi",
+        "tax": "manga_type"
+    },
+    "976": {
+        "name": "OEL",
+        "slug": "oel",
+        "tax": "manga_type"
+    },
+    "12920": {
+        "name": "novel",
+        "slug": "novel",
+        "tax": "manga_type"
+    },
+    "12919": {
+        "name": "one_shot",
+        "slug": "one_shot",
+        "tax": "manga_type"
+    },
+    "12312": {
+        "name": "ONE SHOT",
+        "slug": "one-shot",
+        "tax": "manga_type"
+    },
+    "261": {
+        "name": "Erotic",
+        "slug": "erotic",
+        "tax": "manga_content_flag"
+    }
+}

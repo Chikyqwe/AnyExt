@@ -6,6 +6,8 @@ const router = express.Router();
 
 const video = require('../controllers/videoController');
 const anime = require('../controllers/animeController');
+const manga = require('../controllers/mangaController');
+const content = require('../controllers/contentController');
 const image = require('../controllers/imageController');
 const asyncHandler = require('../middlewares/asyncHandler');
 
@@ -38,32 +40,41 @@ router.get('/app/v', video.appV);
 router.get('/api/download', video.download);
 
 // ──────────────────────────────────────────────
-//  ANIME
+//  CONTENT (ANIME & MANGA)
 // ──────────────────────────────────────────────
 
-// GET  /api/info?uid=  ← NUEVO (unifica /api/description + /api/episodes)
-router.get('/api/info', anime.info);
+// GET  /api/info?uid=  ← (unifica anime y manga)
+router.get('/api/info', content.info);
 
-// GET  /anime/list?p=  ← ACTUALIZADO (agrega paginación, p=all para todo)
-router.get('/anime/list', anime.list);
+// GET  /api/list?p=  ← (unifica anime y manga con paginación)
+router.get('/api/list', content.list);
+
+// POST /api/search  ← (unifica búsquedas)
+router.post('/api/search', content.search);
+
+// POST /api/rebuildSearch
+router.post('/api/rebuildSearch', content.rebuildSearch);
+
+// ──────────────────────────────────────────────
+//  ANIME (Legacy or specific)
+// ──────────────────────────────────────────────
 
 // GET  /anime/last
 router.get('/anime/last', anime.last);
 
-// POST /anime/search  ← NUEVO
-router.post('/anime/search', anime.search);
-
-// POST /anime/img  ← NUEVO (cover + ep thumbnail)
-router.post('/anime/img', anime.img);
+// POST /api/img  ← (cover + ep thumbnail para anime y manga)
+router.post('/api/img', content.img);
 
 router.get('/anime/roku/img', anime.rokuimg);
 
 router.get('/api', anime.initmjs)
 
 router.get('/api/basic/info', anime.basicInfo)
+
 // ──────────────────────────────────────────────
 //  IMAGES
 // ──────────────────────────────────────────────
+
 
 // GET  /image?url=
 router.get('/image', image.imageProxy);

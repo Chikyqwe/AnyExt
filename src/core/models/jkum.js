@@ -1,3 +1,5 @@
+const { axiosGet } = require('../helpersCore');
+
 function rewriteM3U8(m3u8, playlistUrl, referer) {
     const result = m3u8
         .split('\n')

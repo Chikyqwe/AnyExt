@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const PQueue = require("p-queue").default;
 const { last } = require("./lastep");
+const { mainm } = require('./manga/core');
 
 // --------------------------------------------
 // Configuración
@@ -119,7 +120,7 @@ async function descargarYParsear({ totalPages, tmpDir, getPageUrl, parseFn, log,
       writeStream.destroy();
     });
     if (fs.existsSync(outputPath)) {
-      try { fs.unlinkSync(outputPath); } catch (e) {}
+      try { fs.unlinkSync(outputPath); } catch (e) { }
     }
     limpiarDirectorio(tmpDir);
     log(`[DISCARDED] [${label}] fue descartado por superar el límite de fallos.`);
@@ -416,6 +417,7 @@ const main = async ({ log = console.log } = {}) => {
     }
   }
   await last();
+  await mainm();
   log("[SUCCESS] Todo completado");
 
   // 🔥 Limpiar globales

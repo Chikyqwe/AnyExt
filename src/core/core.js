@@ -87,7 +87,7 @@ async function extractAllVideoLinks(pageUrl) {
 
   const $ = cheerio.load(html);
   let videos = [];
-  
+
   // --- NUEVA LÓGICA DINÁMICA BASADA EN REQUIRES ---
   // Buscamos si la URL coincide con alguno de nuestros extractores registrados
   const match = portalExtractors.find(p => p.regex.test(pageUrl));
@@ -119,6 +119,10 @@ const st = require('./models/st');
 const uq = require('./models/uq');
 const mp4 = require('./models/mp4');
 const jkum = require('./models/jkum');
+const esp = require("./models/manga_models/esp")
+const oly = require("./models/manga_models/oly")
+const tmo = require("./models/manga_models/tmo")
+const tmonet = require("./models/manga_models/tmonet")
 
 // ================== NORMALIZER ==================
 function normalizeExtractor(mod) {
@@ -130,6 +134,10 @@ function normalizeExtractor(mod) {
   if (typeof mod?.uq === 'function') return mod.uq;
   if (typeof mod?.mp4 === 'function') return mod.mp4;
   if (typeof mod?.jkum === 'function') return mod.jkum;
+  if (typeof mod?.getesp === 'function') return mod.getesp;
+  if (typeof mod?.getoly === 'function') return mod.getoly;
+  if (typeof mod?.getTmo === 'function') return mod.getTmo;
+  if (typeof mod?.getTmonet === 'function') return mod.getTmonet;
   throw new Error('Extractor inválido');
 }
 
@@ -148,6 +156,10 @@ const extractorMap = {
   uqload: uq,
   mp4upload: mp4,
   jkum: jkum,
+  esp: esp,
+  oly: oly,
+  tmo: tmo,
+  tmonet: tmonet
 };
 
 function getExtractor(name) {

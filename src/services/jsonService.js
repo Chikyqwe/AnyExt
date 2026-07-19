@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { JSON_FOLDER, ANIME_FILE } = require('../config');
+const { JSON_FOLDER, ANIME_FILE, MANGA_FILE } = require('../config');
 
 // Importamos las nuevas clases de caché
 const { KeyCache, MemoryCache } = require('../core/cache/cache');
@@ -17,6 +17,11 @@ const rawCache = new MemoryCache({ maxEntries: 10 });
 const itemCache = new KeyCache({ ttlMs: 10 * 60 * 1000 }); // 10 min persistentes
 
 if (!fs.existsSync(JSON_FOLDER)) fs.mkdirSync(JSON_FOLDER, { recursive: true });
+if (!fs.existsSync(path.join(JSON_FOLDER, 'manga'))) fs.mkdirSync(path.join(JSON_FOLDER, 'manga'), { recursive: true });
+
+const rawMangaCache = new MemoryCache({ maxEntries: 10 });
+const itemMangaCache = new KeyCache({ ttlMs: 10 * 60 * 1000 }); // 10 min persistentes
+
 
 /**
  * Lee el JSON completo y lo cachea en RAM
@@ -76,23 +81,113 @@ function getAnimeById(id) {
  */
 function getAnimeByUnitId(unitId) {
   const numId = parseInt(unitId, 10);
-  if (isNaN(numId)) return null;
+  if (isNaN(numId)) return { error: true, message: "ID inválido" };
 
   const cacheKey = `animeUnitId:${numId}`;
-  let anime = itemCache.load(cacheKey);
-  if (anime) return anime;
+  let cachedResponse = itemCache.load(cacheKey);
+  if (cachedResponse) return cachedResponse;
 
-  anime = readAnimeList().find(a => a.unit_id === numId) || null;
-  if (anime) itemCache.save(cacheKey, anime);
-  return anime;
+  const animeList = readAnimeList();
+  if (!animeList || animeList.length === 0) return { error: true, message: "No hay datos disponibles" };
+
+  // 1. Intentar buscar la coincidencia exacta
+  let anime = animeList.find(a => a.unit_id === numId);
+
+  // Si se encuentra el exacto, lo guardamos en caché y lo devolvemos directamente
+  if (anime) {
+    itemCache.save(cacheKey, anime);
+    return anime;
+  }
+
+  // 2. Si no existe, buscar el más cercano para recomendar
+  const closestAnime = animeList.reduce((closest, current) => {
+    const currentDiff = Math.abs(current.unit_id - numId);
+    const closestDiff = Math.abs(closest.unit_id - numId);
+    return currentDiff < closestDiff ? current : closest;
+  });
+
+  // 3. Estructurar la respuesta de error con la recomendación
+  const errorResponse = {
+    error: true,
+    recommendedId: closestAnime.unit_id
+  };
+
+  // Guardamos también el error en caché para que no repita la búsqueda pesada
+  itemCache.save(cacheKey, errorResponse);
+
+  return errorResponse;
 }
+
+/**
+ * Lee el JSON completo de Mangas y lo cachea en RAM
+ */
+function readMangaRawJson() {
+  const cacheKey = 'rawMangaJson';
+  let data = rawMangaCache.load(cacheKey);
+  if (data) return data;
+
+  try {
+    if (!fs.existsSync(MANGA_FILE)) {
+      data = { metadata: {}, mangas: [] };
+    } else {
+      data = JSON.parse(fs.readFileSync(MANGA_FILE, 'utf8'));
+    }
+    rawMangaCache.save(cacheKey, data, 5000);
+    return data;
+  } catch (err) {
+    console.error('[JSON SERVICE] Error leyendo MANGA JSON:', err);
+    return { metadata: {}, mangas: [] };
+  }
+}
+
+/**
+ * Devuelve lista de mangas
+ */
+function readMangaList() {
+  return readMangaRawJson().mangas || [];
+}
+
+/**
+ * Busca manga por unit_id
+ */
+function getMangaByUnitId(unitId) {
+  const numId = parseInt(unitId, 10);
+  if (isNaN(numId)) return { error: true, message: "ID inválido" };
+
+  const cacheKey = `mangaUnitId:${numId}`;
+  let cachedResponse = itemMangaCache.load(cacheKey);
+  if (cachedResponse) return cachedResponse;
+
+  const mangaList = readMangaList();
+  if (!mangaList || mangaList.length === 0) return { error: true, message: "No hay datos disponibles" };
+
+  let manga = mangaList.find(a => a.unit_id === numId);
+
+  if (manga) {
+    itemMangaCache.save(cacheKey, manga);
+    return manga;
+  }
+
+  const closestManga = mangaList.reduce((closest, current) => {
+    const currentDiff = Math.abs(current.unit_id - numId);
+    const closestDiff = Math.abs(closest.unit_id - numId);
+    return currentDiff < closestDiff ? current : closest;
+  });
+
+  const errorResponse = {
+    error: true,
+    recommendedId: closestManga.unit_id
+  };
+
+  itemMangaCache.save(cacheKey, errorResponse);
+
+  return errorResponse;
+}
+
 
 /**
  * Construye URL de episodio según mirror
  */
-async function extractAniyae(url, ep) {
-
-}
 async function buildEpisodeUrl(anime, ep, mirror = 1) {
   const m = parseInt(mirror, 10);
   const e = parseInt(ep, 10);
@@ -216,5 +311,8 @@ module.exports = {
   getAnimeByUnitId,
   buildEpisodeUrl,
   getJsonFiles,
-  getJSONPath
+  getJSONPath,
+  readMangaRawJson,
+  readMangaList,
+  getMangaByUnitId
 };

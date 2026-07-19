@@ -15,14 +15,12 @@ const LRU_DESCRIPTION_TTL = 60_000 * 5;
 const {
   getJSONPath,
   getAnimeByUnitId,
-  getAllAnimes,
   readAnimeList
 } = require('../services/jsonService');
 
 const {
   getDescription,
   getEpisodes,
-  getEpisodeImage,
   proxyImage
 } = require('../utils/helpers');
 
@@ -127,8 +125,8 @@ exports.info = asyncHandler(async (req, res) => {
 
   const anime = getAnimeByUnitId(uid);
 
-  if (!anime) {
-    return res.status(404).json({ error: `No se encontró anime con uid = ${uid}` });
+  if (anime.error == true) {
+    return res.status(404).json({ error: `No se encontró anime con uid ${uid}, ¿quiso decir ${anime.recommendedId}?`, recommendedId: anime.recommendedId });
   }
 
   // ── DESCRIPTION CACHE ─────────────────────
@@ -160,38 +158,48 @@ exports.info = asyncHandler(async (req, res) => {
     source: null
   };
 
-  for (const mirrorKey of MIRRORS) {
+  const promises = MIRRORS.map(async (mirrorKey) => {
     const sourceUrl = anime.sources?.[mirrorKey];
-    if (!sourceUrl) continue;
+    if (!sourceUrl) return null;
 
     try {
       const raw = await getEpisodes(sourceUrl);
-      if (!raw?.episodes?.length) continue;
-
-      // Comparamos si este mirror tiene más episodios que el mejor encontrado hasta ahora
-      if (raw.episodes.length > bestResult.episodes.length) {
-        bestResult = {
-          episodes: raw.episodes.map(ep => ({
-            num: Number(ep.number),
-            url: `/player/${uid}/${ep.number}`,
-          })),
-          status: Boolean(raw.isEnd) ? 'Finalizado' : 'En emisión',
-          source: mirrorKey
-        };
-      }
+      if (!raw?.episodes?.length) return null;
+      return { raw, mirrorKey };
     } catch (err) {
       console.warn(`[info/eps] ${mirrorKey}: ${err.message}`);
+      return null;
+    }
+  });
+
+  const results = await Promise.all(promises);
+
+  for (const result of results) {
+    if (!result) continue;
+    const { raw, mirrorKey } = result;
+
+    // Comparamos si este mirror tiene más episodios que el mejor encontrado hasta ahora
+    if (raw.episodes.length > bestResult.episodes.length) {
+      bestResult = {
+        episodes: raw.episodes.map(ep => ({
+          num: Number(ep.number),
+          url: `/player/${uid}/${ep.number}`,
+        })),
+        status: Boolean(raw.isEnd) ? 'Finalizado' : 'En emisión',
+        source: mirrorKey,
+        tags: raw.tags
+      };
     }
   }
 
   res.json({
-    type: 'anime',
+    type: 'video',
     title: anime.title,
     slug: anime.slug,
-    category: anime.category || 'anime',
+    category: anime.btype === 'H' ? 'hentai' : (anime.btype === 'A' ? 'anime' : (anime.category || null)),
+    tags: bestResult.tags,
     eps: bestResult.episodes.length,
     desc: description || '',
-    tags: anime.tags || [],
     status: bestResult.status,
     episodes: bestResult.episodes,
     uid,
@@ -307,7 +315,7 @@ exports.search = asyncHandler(async (req, res) => {
     limit = Infinity;
     const [, keyPath, rawValue] = match;
     const targetValue = rawValue.trim().toLowerCase();
-    
+
     const filtered = searchable.filter(anime => {
       const getValueByPath = (obj, path) => {
         return path.split('.').reduce((acc, part) => {
@@ -387,7 +395,7 @@ exports.rebuildSearch = asyncHandler(async (req, res) => {
 exports.initmjs = asyncHandler(async (req, res) => {
   res.json({
     mjs: 'This is the AnyExt API, please return to the main page.',
-    web: 'https://anyext-m5lt.onrender.com/',
+    web: 'https://anyext.qzz.io/',
     date: new Date().toISOString()
   });
 });

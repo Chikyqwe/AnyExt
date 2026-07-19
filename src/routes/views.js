@@ -8,11 +8,11 @@ const imgs = require('../controllers/imageController');
 const axios = require('axios');
 const STATIC_SERVER_URL = process.env.STATIC_SERVER_URL;
 
-async function getHtmlContent(filename) {
+async function getHtmlContent(filename, l) {
   let content = '';
   let status = 200;
 
-  if (STATIC_SERVER_URL) {
+  if (STATIC_SERVER_URL && !l) {
     try {
       const response = await axios.get(`${STATIC_SERVER_URL}/${filename}`);
       content = response.data;
@@ -41,8 +41,8 @@ async function getHtmlContent(filename) {
 }
 
 // -------------------- HELPERS --------------------
-async function sendHtml(res, filename) {
-  const { content, status } = await getHtmlContent(filename);
+async function sendHtml(res, filename, l) {
+  const { content, status } = await getHtmlContent(filename, l);
   res.setHeader('Content-Type', 'text/html');
   res.status(status).send(content);
 }
@@ -95,6 +95,10 @@ router.get('/player/:id/:ep', async (req, res) => {
   }
 });
 
+router.get("/reader/test", async (req, res) => {
+  await sendHtml(res, 'Treader.html', true);
+});
+
 router.get('/app', async (req, res) => await sendHtml(res, 'app.html'));
 // Privacy policy
 router.get('/privacy-policy.html', async (req, res) => await sendHtml(res, 'privacy-policy.html'));
@@ -121,7 +125,7 @@ router.get('/app/share', async (req, res) => {
 
     const { content: baseHtml, status } = await getHtmlContent('app_redir.html');
     const html = baseHtml.replace('</head>', `${metaTags}\n</head>`);
-    
+
     res.setHeader('Content-Type', 'text/html');
     res.status(status).send(html);
   } catch (err) {

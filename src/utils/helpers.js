@@ -9,6 +9,8 @@ const vm = require('vm');
 const { http, https } = require('follow-redirects');
 const httpNative = require('http');
 const httpsNative = require('https');
+const genmap = require("./maps/map.json")
+const { axiosGet } = require('../core/helpersCore');
 
 // ============================================================================
 // MÓDULO: HTTP / AXIOS
@@ -82,7 +84,9 @@ const ScraperModule = (() => {
       .replace(/^-+|-+$/g, "")            // quitar "-" al inicio/final
       .replace(/-{2,}/g, "-");            // evitar "--"
   }
+
   async function extractAnimeFLV(data) {
+
     const info = data.match(ParseModule.ANIME_INFO);
     const eps = data.match(ParseModule.EPISODES);
     if (!info || !eps) return null;
@@ -90,6 +94,14 @@ const ScraperModule = (() => {
     const anime_info = ParseModule.safeEval(info[1]);
     const episodesRaw = ParseModule.safeEval(eps[1]);
     const pattern = await PatternModule.getAnimeFLVPattern();
+
+    // cargar en cheerio
+    const $ = cheerio.load(data);
+    const tags = [];
+    $('.Nvgnrs a').each((_, el) => {
+      const tagText = $(el).text().trim();
+      if (tagText) tags.push(tagText);
+    });
 
     const episodes = episodesRaw.map(e => {
       const num = Array.isArray(e) ? e[0] : e;
@@ -99,9 +111,10 @@ const ScraperModule = (() => {
     return {
       source: 'AnimeFLV', title: anime_info[2], slug: anime_info[1],
       animeId: anime_info[0], isNewEP: anime_info[3],
-      isEnd: anime_info.length === 3, episodes_count: episodes.length, episodes
+      isEnd: anime_info.length === 3, episodes_count: episodes.length, episodes, tags
     };
   }
+
   async function extractTio(data) {
     const info = data.match(ParseModule.ANIME_INFO);
     const eps = data.match(ParseModule.EPISODES);
@@ -110,6 +123,11 @@ const ScraperModule = (() => {
     const anime_info = ParseModule.safeEval(info[1]);
     const episodesRaw = ParseModule.safeEval(eps[1]);
     const pattern = await PatternModule.getTioPattern();
+    const $ = cheerio.load(data)
+    const tags = []
+    $('.genres a').each((index, element) => {
+      tags.push($(element).text().trim());
+    });
 
     const episodes = episodesRaw.map(e => {
       const num = Array.isArray(e) ? e[0] : e;
@@ -119,9 +137,10 @@ const ScraperModule = (() => {
     return {
       source: 'TIO', title: anime_info[2], slug: anime_info[1],
       animeId: anime_info[0], isNewEP: anime_info[3],
-      isEnd: anime_info.length === 3, episodes_count: episodes.length, episodes
+      isEnd: anime_info.length === 3, episodes_count: episodes.length, episodes, tags
     };
   }
+
   async function extractone(data) {
     const $ = cheerio.load(data);
 
@@ -139,6 +158,7 @@ const ScraperModule = (() => {
     const animeId = $('#r .info-r').attr('data-ai'); // ID para thumbnails
     const title = $('.info-l figure img').attr('alt') || '';
     const slug = slugify(title);
+    const tags = $(".gn a").map((i, el) => $(el).text().trim()).get();
     if (scriptText) {
       const match = scriptText.match(/var eps = (\[.*?\]);/s);
       if (match) {
@@ -150,9 +170,6 @@ const ScraperModule = (() => {
         }));
       }
     }
-
-    // 3️⃣ Extraer título, portada y slug
-
 
     // 4️⃣ Extraer fecha del próximo episodio si existe
     let isNewEP = null;
@@ -169,7 +186,8 @@ const ScraperModule = (() => {
       isNewEP,
       isEnd,
       episodes_count: episodes.length,
-      episodes
+      episodes,
+      tags
     };
   }
 
@@ -187,7 +205,7 @@ const ScraperModule = (() => {
 
     const token = $('meta[name="csrf-token"]').attr("content");
     const cookies = headers["set-cookie"]?.join("; ") || "";
-
+    const tags = $('.card-bod li:contains("Generos: ") a').map((i, el) => $(el).text().trim()).get();
     const ogUrl = $('meta[property="og:url"]').attr("content") || url;
     const slug = ogUrl.split("/").filter(Boolean).pop();
 
@@ -202,7 +220,6 @@ const ScraperModule = (() => {
     const isEnd = statusText.includes("concluido") || statusText.includes("finalizado");
     const isNewEP = statusText.includes("emision") ? true : null;
 
-    // 🔥 2️⃣ PRIMERA REQUEST (para saber cuántas páginas hay)
     const { data: firstRes } = await client.post(
       `https://jkanime.net/ajax/episodes/${animeId}/1`,
       new URLSearchParams({ _token: token }),
@@ -215,10 +232,8 @@ const ScraperModule = (() => {
         }
       }
     );
-
     const totalPages = firstRes.last_page;
 
-    // 🔥 3️⃣ CREAR TODAS LAS REQUESTS EN PARALELO
     const requests = [];
 
     for (let page = 1; page <= totalPages; page++) {
@@ -240,7 +255,6 @@ const ScraperModule = (() => {
 
     const responses = await Promise.all(requests);
 
-    // 🔥 4️⃣ MAPEAR TODO
     const allEpisodes = responses.flatMap(r =>
       r.data.data.map(ep => ({
         number: ep.number,
@@ -263,89 +277,15 @@ const ScraperModule = (() => {
       isNewEP,
       isEnd,
       episodes_count: allEpisodes.length,
-      episodes: allEpisodes
+      episodes: allEpisodes,
+      tags
     };
   }
 
   async function extractAniyae(html) {
-    const $ = cheerio.load(html);
-
-    // ===============================
-    // 1️⃣ EXTRAER animeId DESDE SCRIPT
-    // ===============================
-    let animeId = null;
-
-    $('script').each((i, el) => {
-      const text = $(el).html();
-      if (!text) return;
-
-      const match = text.match(/animeId\s*=\s*(\d+)/);
-      if (match) {
-        animeId = match[1];
-      }
-    });
-
-    if (!animeId) throw new Error("❌ No se encontró animeId");
-
-    // ===============================
-    // 2️⃣ TITLE
-    // ===============================
-    const title = $('.stack span').first().text().trim();
-
-    // ===============================
-    // 3️⃣ SLUG
-    // ===============================
-    const slug = slugify(title);
-
-    // ===============================
-    // 4️⃣ STATUS
-    // ===============================
-    const statusText = $('body').text().toLowerCase();
-    const isEnd = statusText.includes("finalizado");
-
-    // ===============================
-    // 5️⃣ THUMBNAIL
-    // ===============================
-    const thumbnail = $('img').first().attr('src') || '';
-
-    // ===============================
-    // 6️⃣ API EPISODIOS
-    // ===============================
-    const api = `https://open.aniyae.net/wp-json/kiranime/v1/anime/${animeId}/episodes?page=1&per_page=999999999&order=asc`;
-
-    const res = await axios.get(api);
-    const epsArray = res.data.episodes || [];
-
-    // ===============================
-    // 7️⃣ MAPEAR EPISODIOS
-    // ===============================
-    const episodes = epsArray.map(ep => ({
-      number: Number(ep.number),
-      url: ep.url,
-      img: ep.image || thumbnail
-    }));
-
-    // ===============================
-    // 8️⃣ NUEVO EP
-    // ===============================
-    let isNewEP = null;
-    if (!isEnd && episodes.length) {
-      isNewEP = episodes[episodes.length - 1].number;
-    }
-
-    // ===============================
-    // 9️⃣ RESULTADO FINAL
-    // ===============================
-    return {
-      source: "aniyae",
-      title,
-      slug,
-      isNewEP,
-      isEnd,
-      episodes_count: episodes.length,
-      episodes
-    };
+    //remove fuctions
   }
+
   async function extractTioHentai(html) {
     const $ = cheerio.load(html);
 
@@ -374,7 +314,7 @@ const ScraperModule = (() => {
     // 3️⃣ ESTADO
     // ===============================
     const statusText = $('.status').text().toLowerCase();
-
+    const tags = $('.generes a').map((i, el) => $(el).text().trim()).get();
     const isEnd = statusText.includes('finalizado');
 
     // ===============================
@@ -427,9 +367,11 @@ const ScraperModule = (() => {
       isEnd,
       isNewEP,
       episodes_count: episodes.length,
-      episodes
+      episodes,
+      tags
     };
   }
+
   async function extractHentaila(html) {
     const $ = cheerio.load(html);
 
@@ -446,7 +388,7 @@ const ScraperModule = (() => {
     // 2️⃣ ESTADO (Finalizado / En emisión)
     // ===============================
     const metaText = $('.flex.flex-wrap.items-center').text().toLowerCase();
-
+    const tags = $(".btn-line-o.rounded-full").map((i, el) => $(el).text().trim()).get();
     const isEnd = metaText.includes('finalizado');
 
     // ===============================
@@ -493,10 +435,323 @@ const ScraperModule = (() => {
       isNewEP,
       isEnd,
       episodes_count: episodes.length,
-      episodes
+      episodes,
+      tags
     };
   }
-  return { extractAnimeFLV, extractTio, extractone, extractJK, extractAniyae, extractTioHentai, extractHentaila };
+
+  async function extractTmonet(url) {
+    const mangaPath = new URL(url).pathname;
+    const p = "https://zonatmo.net/wp-api/api/single" + mangaPath;
+
+    let data = (await axiosGet(p, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': '*/*',
+        'Referer': p
+      }
+    })).data;
+    const dat = JSON.parse(data)
+
+    const slug = dat.data.slug;
+    const title = dat.data.title;
+    const isEnd = dat.data.status[0] === 19;
+    const tags = [];
+    const genid = dat.data.genres;
+
+    for (const id of genid) {
+      const genfind = genmap[id];
+      if (genfind) { tags.push(genfind.name); }
+    }
+
+    const chapters = [];
+    let currentPage = 1;
+    let totalPages = 1;
+
+    do {
+      const chaptersUrl = `https://zonatmo.net/wp-api/api/single${mangaPath}/chapters?page=${currentPage}&postsPerPage=50&order=desc`;
+      try {
+        const chaptersRest = (await axiosGet(chaptersUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0',
+            'Accept': '*/*',
+            'Referer': p
+          }
+        })).data;
+        const chaptersRes = JSON.parse(chaptersRest)
+
+        if (chaptersRes && !chaptersRes.error && chaptersRes.data) {
+          const items = chaptersRes.data.items || [];
+          for (const item of items) {
+            chapters.push({
+              number: item.chapter_number,
+              url: "https://zonatmo.net" + mangaPath + "/" + item.slug,
+              img: "https://zonatmo.net/wp-content/uploads" + dat.data.cover
+            });
+          }
+
+          if (chaptersRes.data.pagination) {
+            totalPages = chaptersRes.data.pagination.total_pages;
+          }
+        } else {
+          break;
+        }
+      } catch (error) {
+        console.error(`Error obteniendo capítulos de la página ${currentPage}:`, error);
+        break;
+      }
+
+      currentPage++;
+    } while (currentPage <= totalPages);
+    const chps = chapters.reverse();
+    return {
+      source: "tmonet",
+      title,
+      slug,
+      isEnd,
+      chapter_count: chapters.length,
+      "chapters": chps,
+      tags
+    };
+  }
+
+  async function extractesp(html, mangaSlug) {
+    const cheerio = require('cheerio');
+    let $ = cheerio.load(html);
+
+    const source = 'esp';
+    const title = $('.manga-title').text().trim();
+
+    // Detectar el slug correcto desde la URL o el body
+    const slug = $('body').attr('data-manga-slug') || mangaSlug || 'suzuka';
+
+    const statusText = $('.status-text').text().trim().toLowerCase();
+    const isEnd = statusText.includes('finalizado') || statusText.includes('completado');
+    const img = $('.manga-cover').attr('src') || '';
+
+    const tags = [];
+    $('.genero-item').each((i, el) => {
+      tags.push($(el).text().trim());
+    });
+
+    // --- LÓGICA DE RECOLECCIÓN DE CAPÍTULOS RECURSIVA ---
+    const chaptersRAW = [];
+
+    async function fetchAllChapters(currentCheerio) {
+      // 1. Extraer capítulos de la página/bloque actual
+      currentCheerio('.chapter-card:not(.chapter-card-full):not(.continue-card) .chapter-link').each((i, el) => {
+        const number = currentCheerio(el).attr('data-chapter') || '';
+        let url = currentCheerio(el).attr('href') || '';
+
+        if (url && url.startsWith('/')) {
+          url = `https://MangaLect.org${url}`;
+        }
+
+        // Evitamos duplicados por si acaso el backend repite elementos
+        if (number && !chaptersRAW.some(c => c.number === number)) {
+          chaptersRAW.push({ number, url, img });
+        }
+      });
+
+      // 2. Buscar el botón "Ver más"
+      const moreLink = currentCheerio('#more-link').attr('href');
+
+      if (moreLink && moreLink.includes('?before=')) {
+        // CORRECCIÓN: La paginación mantiene la ruta base (/info/slug)
+        const nextPageUrl = `https://MangaLect.org/info/${slug}/${moreLink}`;
+
+        try {
+          const response = await fetch(nextPageUrl, {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' } // Buenas prácticas para peticiones internas
+          });
+
+          if (response.ok) {
+            const nextHtml = await response.text();
+            const nextCheerio = cheerio.load(nextHtml);
+            // Llamada recursiva pasando el nuevo contexto de Cheerio
+            await fetchAllChapters(nextCheerio);
+          }
+        } catch (error) {
+          console.error("Error al obtener más capítulos:", error);
+        }
+      }
+    }
+
+    // Iniciar la recolección con el HTML inicial
+    await fetchAllChapters($);
+
+    // Invertir al final para que queden ordenados cronológicamente
+    const chapters = chaptersRAW.reverse();
+
+    return {
+      source,
+      title,
+      slug,
+      isEnd,
+      chapter_count: chapters.length,
+      chapters,
+      tags
+    };
+  }
+
+  async function extractoly(seriesUrl, htmlContent) {
+    const urlParts = seriesUrl.split('/series/');
+    const fullSlug = urlParts[1] ? urlParts[1].split('?')[0] : '';
+    const slug = fullSlug.replace(/^comic-/, '');
+
+    const $ = cheerio.load(htmlContent);
+    const nuxtDataRaw = $('#__NUXT_DATA__').html();
+
+    let title = '';
+    let img = '';
+    let isEnd = false;
+    let genres = [];
+
+    if (nuxtDataRaw) {
+      try {
+        const data = JSON.parse(nuxtDataRaw);
+
+        const series = data.find(item =>
+          item &&
+          typeof item === 'object' &&
+          !Array.isArray(item) &&
+          'name' in item &&
+          'cover' in item &&
+          'genres' in item &&
+          'status' in item
+        );
+
+        if (series) {
+          title = data[series.name] || '';
+          img = data[series.cover] || '';
+
+          const statusObj = data[series.status];
+          if (statusObj && statusObj.name) {
+            const statusText = data[statusObj.name];
+            if (typeof statusText === 'string') {
+              isEnd = statusText.toLowerCase().includes('finalizado');
+            }
+          }
+
+          const genrePtrs = data[series.genres];
+          if (Array.isArray(genrePtrs)) {
+            genres = genrePtrs.map(ptr => {
+              const g = data[ptr];
+              return g && g.name ? data[g.name].trim() : '';
+            }).filter(Boolean);
+          }
+        }
+      } catch (e) { }
+    }
+
+    const allChapters = [];
+    let currentPage = 1;
+    let hasMorePages = true;
+
+    while (hasMorePages) {
+      const apiUrl = `https://panel.olympusxyz.com/api/series/${slug}/chapters?page=${currentPage}&direction=desc`;
+
+      try {
+        const response = await fetch(apiUrl);
+        if (!response.ok) break;
+
+        const apiData = await response.json();
+
+        if (apiData && apiData.data && apiData.data.length > 0) {
+          for (const ch of apiData.data) {
+            allChapters.push({
+              number: String(ch.name),
+              url: `https://olympusxyz.com/capitulo/${ch.id}/${fullSlug}`,
+              img: img
+            });
+          }
+
+          if (apiData.links && apiData.links.next) {
+            currentPage++;
+          } else {
+            hasMorePages = false;
+          }
+        } else {
+          hasMorePages = false;
+        }
+      } catch (error) {
+        hasMorePages = false;
+      }
+    }
+
+    return {
+      source: 'olympusxyz',
+      title,
+      slug: fullSlug,
+      isEnd,
+      chapter_count: allChapters.length,
+      chapters: allChapters.reverse(),
+      tags: genres
+
+    };
+  }
+  function extractTmo(html, urlOriginal) {
+    const $ = cheerio.load(html);
+
+    const $header = $('.element-header-content');
+    const $textInfo = $header.find('.element-header-content-text');
+
+    const source = 'tmo';
+    const title = $textInfo.find('.element-title').clone().children('small').remove().end().text().trim();
+    const cover = $header.find('.book-thumbnail').attr('src');
+    const slug = ((new URL(urlOriginal)).pathname).split('/').filter(Boolean).at(-1);
+    const statusText = $('.book-status').text().toLowerCase().trim();
+    let isEnd;
+    if (statusText === "ended" | statusText === "cancelado" | statusText === "cancelado" | statusText === "finalizado") {
+      isEnd = true
+    } else { isEnd = false };
+
+    const tags = [];
+    $textInfo.find('h6 a.badge-primary').each((i, el) => {
+      tags.push($(el).text().trim());
+    });
+
+    // 3. Extraer los capítulos
+    const chapters = [];
+
+    // Selector habitual para los contenedores o enlaces de los capítulos
+    $('.upload-link').each((index, element) => {
+      const $el = $(element);
+
+      // 1. Número del capítulo (desde el atributo de datos o el texto)
+      const numero = $el.attr('data-chapter-number') || $el.find('.chapter-number').attr('data-number');
+      const linkLectura = $el.find('a.btn-primary').attr('href');
+
+      chapters.push({
+        num: numero ? parseFloat(numero) : null,
+        url: linkLectura || null,
+        img: cover
+      });
+    });
+
+    return {
+      source,
+      title,
+      slug,
+      isEnd,
+      chapter_count: chapters.length,
+      "chapters": chapters.reverse(),
+      tags
+    };
+  }
+  return {
+    extractAnimeFLV,
+    extractTio,
+    extractone,
+    extractJK,
+    extractAniyae,
+    extractTioHentai,
+    extractHentaila,
+    extractTmonet,
+    extractesp,
+    extractoly,
+    extractTmo
+  };
 })();
 
 // ============================================================================
@@ -598,17 +853,6 @@ const StreamModule = (() => {
     }
   }
 
-  // ============================================================================
-  // streamVideo
-  //
-  // PROBLEMA RAÍZ anterior: cada llamada a originRes.pipe(res) registraba
-  // ~5 listeners internos (close, finish, drain, error, unpipe) en `res`.
-  // Con reconexiones, esos listeners se acumulaban → MaxListenersExceededWarning
-  // y memory leaks.
-  //
-  // SOLUCIÓN: escribir manualmente con originRes.on('data') + res.write(),
-  // manejando back-pressure con pause/resume. Cero listeners extra en `res`.
-  // ============================================================================
   function streamVideo(videoUrl, req, res) {
     if (!videoUrl) return res.status(400).send('Falta parámetro videoUrl');
 
@@ -803,6 +1047,22 @@ async function getEpisodes(url) {
       return ScraperModule.extractTioHentai(data);
     }
 
+    if (/zonatmo\.net$/.test(host)) {
+      return ScraperModule.extractTmonet(url);
+    };
+
+    if (/mangalect\.org$/.test(host)) {
+      return ScraperModule.extractesp(data);
+    };
+
+    if (/olympusxyz\./.test(host)) {
+      return ScraperModule.extractoly(url, data);
+    };
+
+    if (/zonatmo\.org$/.test(host)) {
+      return ScraperModule.extractTmo(data, url);
+    };
+
     return {
       success: false,
       error: `No hay extractor para host: ${host}`
@@ -818,7 +1078,10 @@ async function getEpisodes(url) {
     };
   }
 }
+
 async function getDescription(url) {
+  if (!url) return '';
+
   try {
     const { data } = await HttpModule.axiosInstance.get(url, {
       headers: {
@@ -828,27 +1091,114 @@ async function getDescription(url) {
       },
       timeout: 10000
     });
-
     const $ = cheerio.load(data);
+    const host = new URL(url).hostname;
+
+    // 1. EXTRAER DATOS CRÍTICOS ANTES DE LIMPIAR EL HTML
+    let nuxtDataRaw = null;
+    if (/olympusxyz\./.test(host)) {
+      nuxtDataRaw = $('#__NUXT_DATA__').html();
+    }
+
+    // 2. Limpieza previa común (Ahora sí, removemos scripts sin romper Olympus)
     $('script, style, noscript').remove();
 
+    // Filtro inteligente para el fallback
     const esBasura = (t) =>
       t.length < 80 ||
       ['ningún vídeo', 'alojado', 'nuestros servidores', 'correo',
-        'plataforma', 'indexer', 'menores de edad', "ver online"].some(w => t.toLowerCase().includes(w));
+        'plataforma', 'indexer', 'menores de edad', 'ver online'].some(w => t.toLowerCase().includes(w));
 
-    return (
-      $('section.WdgtCn .Description p').first().text().trim() ||  // FLV
-      $('aside p.sinopsis').first().text().trim() ||  // TIO, TIOHENTAI
-      $('[class*="sinopsis"] p').first().text().trim() ||
+
+    if (/animeflv\.(net|one)$/.test(host)) {
+      return $('section.WdgtCn .Description p').first().text().trim();
+    }
+
+    if (/tioanime\./.test(host)) {
+      return $('aside p.sinopsis').first().text().trim();
+    }
+
+    if (/tiohentai\./.test(host)) {
+      return $('aside p.sinopsis').first().text().trim();
+    }
+
+    if (/hentaila\./.test(host)) {
+      return $('div.entry p').first().text().trim();
+    }
+
+    if (/aniyae\./.test(host)) {
+      return $('div.border-l-2.pl-4').first().text().trim();
+    }
+
+    if (/zonatmo\.net$/.test(host)) {
+      const p = "https://zonatmo.net/wp-api/api/single" + (new URL(url)).pathname
+      const res = (axiosGet(p, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept': '*/*',
+          'Referer': p
+        }
+      })).data
+      const data = JSON.parse(res)
+      return data.data.overview
+    }
+
+    if (/zonatmo\.org$/.test(host)) {
+      return $(".element-description").text().trim();
+    }
+
+    if (/mangalect\.org$/.test(host)) {
+      return $("#synopsis-text").text().trim();
+    }
+
+    if (/olympusxyz\./.test(host)) {
+      if (nuxtDataRaw) {
+        try {
+          const data = JSON.parse(nuxtDataRaw);
+
+          // Buscamos en todo el JSON el objeto que contenga las llaves de la serie
+          let series = null;
+          for (const item of data) {
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+              if ('summary' in item || 'description' in item) {
+                series = item;
+                break;
+              }
+            } else if (Array.isArray(item)) {
+              series = item.find(sub => sub && typeof sub === 'object' && ('summary' in sub || 'description' in sub));
+              if (series) break;
+            }
+          }
+
+          if (series) {
+            const stringIndex = series.summary || series.description;
+            if (stringIndex && data[stringIndex]) {
+              return data[stringIndex]
+                .trim()
+                .replace(/\r?\n\s*\r?\n/g, '___PARRAFO___')
+                .replace(/\r?\n/g, ' ')
+                .replace(/___PARRAFO___/g, '\n\n')
+                .replace(/[ ]+/g, ' ');
+            }
+          }
+        } catch (e) {
+          console.error("Error al extraer la sinopsis desde Nuxt JSON:", e);
+        }
+      }
+      return '';
+    }
+
+    // fallback genérico (usado por JKAnime y cualquier nuevo sitio sin extractor específico)
+    const fallbackText = $('p').map((_, el) => $(el).text().trim()).get().find(t => !esBasura(t));
+    if (fallbackText) return fallbackText;
+
+    // Último intento: selectores aproximados de sinopsis comunes en la web
+    return $('[class*="sinopsis"] p').first().text().trim() ||
       $('[class*="sinopsis"]').first().text().trim() ||
-      $('div.border-l-2.pl-4').first().text().trim() ||  // ANIYAE
-      $('div.entry p').first().text().trim() ||  // HENTAILA ✅
-      $('p').map((_, el) => $(el).text().trim()).get().find(t => !esBasura(t)) ||  // JK, fallback
-      ''
-    );
+      '';
 
   } catch (e) {
+    console.error(`[getDescription ERROR - ${url}]:`, e.message);
     return '';
   }
 }
