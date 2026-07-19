@@ -10,9 +10,22 @@ if (!archivo) {
 try {
     const data = JSON.parse(fs.readFileSync(archivo, 'utf8'));
 
+    // Validar que exista la lista de animes
+    if (!data.animes || !Array.isArray(data.animes)) {
+        console.error('Error: El archivo JSON no tiene el formato esperado (falta el array "animes").');
+        process.exit(1);
+    }
+
     const uids = new Map();
 
-    for (const [slug, uid] of Object.entries(data)) {
+    // Cambiamos el bucle para iterar sobre el array de objetos
+    for (const anime of data.animes) {
+        const slug = anime.slug;
+        const uid = anime.unit_id; // En tu JSON la propiedad se llama unit_id
+
+        // Saltarse elementos que no tengan estas propiedades definidas
+        if (!slug || !uid) continue;
+
         if (!uids.has(uid)) {
             uids.set(uid, []);
         }
@@ -25,7 +38,7 @@ try {
         if (slugs.length > 1) {
             encontrados++;
             console.log(`UID repetido: ${uid}`);
-            console.log(`  ${slugs.join(', ')}`);
+            console.log(`  Slugs: ${slugs.join(', ')}`);
             console.log('');
         }
     }

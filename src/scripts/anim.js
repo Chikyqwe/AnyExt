@@ -329,15 +329,25 @@ const UnityJsonsV4 = (sourcesPaths, outputPath, log = console.log) => {
 
   const add = (anime, src) => {
     if (!anime?.title) return;
-    const key = normalizarTitulo(anime.title);
-    if (!mapa.has(key)) mapa.set(key, { title: anime.title, slug: anime.slug || null, image: anime.image || null, sources: { FLV: null, ONE: null, TIO: null, JK: null, ANIYAE: null, HENTAILA: null, TIOHENTAI: null } });
+
+    // 1. Intentar usar el slug como llave principal, si no existe, usar el título normalizado
+    const key = anime.slug ? anime.slug.trim().toLowerCase() : normalizarTitulo(anime.title);
+
+    if (!mapa.has(key)) {
+      mapa.set(key, {
+        title: anime.title,
+        slug: anime.slug || null,
+        image: anime.image || null,
+        sources: { FLV: null, ONE: null, TIO: null, JK: null, ANIYAE: null, HENTAILA: null, TIOHENTAI: null }
+      });
+    }
+
     const existing = mapa.get(key);
     if (anime.url) existing.sources[src] = anime.url;
     if ((anime.title?.length || 0) > (existing.title?.length || 0)) existing.title = anime.title;
     if (!existing.image && anime.image) existing.image = anime.image;
     if (!existing.slug && anime.slug) existing.slug = anime.slug;
   };
-
   for (const { path: p, src } of sourcesPaths) {
     if (!fs.existsSync(p)) continue;
 

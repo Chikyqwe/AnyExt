@@ -28,7 +28,7 @@ let fuse = null;
 function buildSearchIndex() {
   const animes = readAnimeList().map(a => ({ ...a, contentType: 'anime' }));
   const mangas = readMangaList().map(m => ({ ...m, contentType: 'manga' }));
-  
+
   const all = [...animes, ...mangas];
 
   searchable = all.map(item => ({
@@ -50,7 +50,7 @@ function buildSearchIndex() {
     ]
   });
 
-  console.log(`[SEARCH] Indexed ${searchable.length} contents (Anime + Manga)`);
+  console.log(`[SEARCH] Indexed ${searchable.length} contents`);
 }
 
 buildSearchIndex();
@@ -63,7 +63,7 @@ exports.list = asyncHandler(async (req, res) => {
 
   const animes = readAnimeList().map(a => ({ ...a, contentType: 'anime' }));
   const mangas = readMangaList().map(m => ({ ...m, contentType: 'manga' }));
-  
+
   // Combine both arrays. We can interleave them or just concatenate.
   const all = [...animes, ...mangas];
 
@@ -118,10 +118,10 @@ exports.info = asyncHandler(async (req, res, next) => {
   }
 
   // Si no se encuentra en ninguno, devolvemos error. Usamos las recomendaciones del anime (podría combinarse)
-  return res.status(404).json({ 
-      error: `No se encontró contenido con uid ${uid}`,
-      recommendedAnimeId: anime.recommendedId,
-      recommendedMangaId: manga.recommendedId
+  return res.status(404).json({
+    error: `No se encontró contenido con uid ${uid}`,
+    recommendedAnimeId: anime.recommendedId,
+    recommendedMangaId: manga.recommendedId
   });
 });
 
@@ -233,7 +233,7 @@ exports.search = asyncHandler(async (req, res) => {
   } else {
     const term = normalize(query);
     results = fuse.search(term);
-    
+
     // Aquí omitimos Jikan (búsqueda web de anime) para que sea unificado localmente, 
     // o podríamos re-añadirlo solo para animes, pero para mantener velocidad lo dejamos en local.
   }
