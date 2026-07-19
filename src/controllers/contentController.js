@@ -61,34 +61,52 @@ buildSearchIndex();
 exports.list = asyncHandler(async (req, res) => {
   const p = req.query.p;
 
-  const animes = readAnimeList().map(a => ({ ...a, contentType: 'anime' }));
-  const mangas = readMangaList().map(m => ({ ...m, contentType: 'manga' }));
-
-  // Combine both arrays. We can interleave them or just concatenate.
-  const all = [...animes, ...mangas];
+  const animesRaw = readAnimeList();
+  const mangasRaw = readMangaList();
 
   if (p === 'all') {
+    const all = [
+      ...animesRaw.map(a => ({ ...a, contentType: 'anime' })),
+      ...mangasRaw.map(m => ({ ...m, contentType: 'manga' }))
+    ];
     return res.json({ items: all });
   }
 
   const page = Math.max(1, parseInt(p) || 1);
-  const total = all.length;
+  const total = animesRaw.length + mangasRaw.length;
   const start = (page - 1) * PER_PAGE;
+  const end = start + PER_PAGE;
 
-  const items = all
-    .slice(start, start + PER_PAGE)
-    .map(item => ({
-      title: item.title,
-      slug: item.slug,
-      unit_id: item.unit_id,
-      image: item.image || item.cover,
-      type: item.contentType
-    }));
+  let slicedItems = [];
+  if (start < animesRaw.length) {
+    if (end <= animesRaw.length) {
+      slicedItems = animesRaw.slice(start, end).map(a => ({ ...a, contentType: 'anime' }));
+    } else {
+      slicedItems = [
+        ...animesRaw.slice(start).map(a => ({ ...a, contentType: 'anime' })),
+        ...mangasRaw.slice(0, end - animesRaw.length).map(m => ({ ...m, contentType: 'manga' }))
+      ];
+    }
+  } else {
+    const mangaStart = start - animesRaw.length;
+    slicedItems = mangasRaw.slice(mangaStart, mangaStart + PER_PAGE).map(m => ({ ...m, contentType: 'manga' }));
+  }
+
+  const items = slicedItems.map(item => ({
+    title: item.title,
+    slug: item.slug,
+    unit_id: item.unit_id,
+    image: item.image || item.cover,
+    type: item.contentType
+  }));
+
+  const mangaStartPage = Math.floor(animesRaw.length / PER_PAGE) + 1;
 
   res.json({
     page,
     total,
     totalpages: Math.ceil(total / PER_PAGE),
+    manga_start_page: mangaStartPage,
     items,
   });
 });
