@@ -84,13 +84,13 @@ exports.play = asyncHandler(async (req, res) => {
     if (type === 'manga') {
       const { getMangaByUnitId } = require('../services/jsonService');
       const { getEpisodes } = require('../utils/helpers');
-      
+
       const manga = getMangaByUnitId(uid);
       if (!manga?.unit_id) return res.status(404).json({ error: true, message: 'Manga no encontrado' });
-      
+
       const isAutoMirror = m === 'auto' || !m || m === '';
-      const mirrorsToTry = isAutoMirror 
-        ? Object.keys(manga.sources || {}).filter(k => manga.sources[k]) 
+      const mirrorsToTry = isAutoMirror
+        ? Object.keys(manga.sources || {}).filter(k => manga.sources[k])
         : [m];
 
       if (mirrorsToTry.length === 0) {
@@ -104,28 +104,28 @@ exports.play = asyncHandler(async (req, res) => {
       for (const mirrorKey of mirrorsToTry) {
         const sourceUrl = manga.sources?.[mirrorKey];
         if (!sourceUrl) continue;
-        
+
         let raw;
         try {
           raw = await getEpisodes(sourceUrl);
         } catch (e) {
           continue;
         }
-        
+
         if (raw && !raw.chapters && raw.episodes) raw.chapters = raw.episodes;
         if (!raw?.chapters) continue;
-        
+
         const chapter = raw.chapters.find(c => Number(c.num || c.number) === ep);
         if (!chapter) continue;
-        
+
         let coreExtractorName = mirrorKey;
         if (mirrorKey === 'olympusxyz') coreExtractorName = 'oly';
         if (mirrorKey === 'mangalect' || mirrorKey === 'lectesp') coreExtractorName = 'esp';
         if (mirrorKey === 'zonatmo') coreExtractorName = 'tmonet';
-        
+
         const ex = getExtractor(coreExtractorName);
         if (!ex) continue;
-        
+
         try {
           const imgs = await ex(chapter.url);
           if (imgs && imgs.length > 0) {
@@ -144,7 +144,7 @@ exports.play = asyncHandler(async (req, res) => {
       }
 
       cache.save(mid, JSON.stringify(validImgs));
-      
+
       const now = Math.floor(Date.now() / 1000);
       return res.json({
         type: 'manga',
@@ -195,7 +195,7 @@ exports.play = asyncHandler(async (req, res) => {
 
     if (!Os) {
       // Servidores HLS
-      if (['sw', 'voe', 'streamwish'].includes(sel.servidor)) {
+      if (['sw', 'voe', 'streamwish', 'uqload'].includes(sel.servidor)) {
         const { mid, Rc } = await getVid(sel.servidor, sel.url, null, force);
         return res.json({
           type,
