@@ -4,10 +4,9 @@
 const express = require('express');
 const router = express.Router();
 
-const video = require('../controllers/videoController');
 const anime = require('../controllers/animeController');
 const manga = require('../controllers/mangaController');
-const content = require('../controllers/contentController');
+const media = require('../controllers/mediaController');
 const image = require('../controllers/imageController');
 const asyncHandler = require('../middlewares/asyncHandler');
 
@@ -16,44 +15,44 @@ const asyncHandler = require('../middlewares/asyncHandler');
 // ──────────────────────────────────────────────
 
 // POST /api/play  ← NUEVO (fusiona /api/servers + /api/video)
-router.post('/api/play', video.play);
+router.post('/api/play', media.play);
 
 // GET  /api/getMedia/:p  ← NUEVO (renombra /api/get/hls/:uuid)
-router.get('/api/getMedia/:p', video.getMedia);
+router.get('/api/getMedia/:p', media.getMedia);
 
 // GET  /api/stream?gid=  ← renombrado desde ?videoUrl= (retrocompat mantenida)
-router.get('/api/stream', video.stream);
+router.get('/api/stream', media.stream);
 
 // GET  /api/req?u=&h=  ← renombrado desde /api/req?url= , agrega header support
-router.get('/api/req', video.reqProxy);
+router.get('/api/req', media.reqProxy);
 
 // GET  /api/proxy?url=&ref=  ← renombrado desde /api/hlsProxy
-router.get('/api/hls', video.proxy);
+router.get('/api/hls', media.proxy);
 
 // GET  /api/queue
-router.get('/api/queue', video.queueStatus);
+router.get('/api/queue', media.queueStatus);
 
 // GET  /app/v
-router.get('/app/v', video.appV);
+router.get('/app/v', media.appV);
 
 // GET  /api/download
-router.get('/api/download', video.download);
+router.get('/api/download', media.download);
 
 // ──────────────────────────────────────────────
 //  CONTENT (ANIME & MANGA)
 // ──────────────────────────────────────────────
 
 // GET  /api/info?uid=  ← (unifica anime y manga)
-router.get('/api/info', content.info);
+router.get('/api/info', media.info);
 
 // GET  /api/list?p=  ← (unifica anime y manga con paginación)
-router.get('/api/list', content.list);
+router.get('/api/list', media.list);
 
 // POST /api/search  ← (unifica búsquedas)
-router.post('/api/search', content.search);
+router.post('/api/search', media.search);
 
 // POST /api/rebuildSearch
-router.post('/api/rebuildSearch', content.rebuildSearch);
+router.post('/api/rebuildSearch', media.rebuildSearch);
 
 // ──────────────────────────────────────────────
 //  ANIME (Legacy or specific)
@@ -63,7 +62,7 @@ router.post('/api/rebuildSearch', content.rebuildSearch);
 router.get('/anime/last', anime.last);
 
 // POST /api/img  ← (cover + ep thumbnail para anime y manga)
-router.post('/api/img', content.img);
+router.post('/api/img', media.img);
 
 router.get('/anime/roku/img', anime.rokuimg);
 
