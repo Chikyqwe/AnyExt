@@ -28,6 +28,19 @@ async function iniciarMantenimiento({ timeoutMs = 8 * 60 * 1000 } = {}) {
     
     setUpdatingStatus(false);
 
+    // Actualizar datos en memoria RAM
+    try {
+      const { reloadMemoryData } = require('./jsonService');
+      reloadMemoryData();
+      
+      const mediaController = require('../controllers/mediaController');
+      if (mediaController.rebuildSearchLocal) {
+        mediaController.rebuildSearchLocal();
+      }
+    } catch(e) {
+      console.error('[MANTENIMIENTO] Error al actualizar memoria o índice:', e);
+    }
+
     // 🔥 Forzar GC si está disponible
     if (global.gc) {
       console.log("[MANTENIMIENTO] Ejecutando GC post-mantenimiento...");

@@ -340,6 +340,8 @@ exports.rebuildSearch = asyncHandler(async (req, res) => {
   res.json({ success: true, indexed: searchable.length });
 });
 
+exports.rebuildSearchLocal = buildSearchIndex;
+
 // ─────────────────────────────────────────────
 // VIDEO ROUTES (from videoController)
 // ─────────────────────────────────────────────

@@ -8,7 +8,8 @@ const Fuse = require('fuse.js');
 const {
   readMangaList,
   getMangaByUnitId,
-  getJSONPath
+  getJSONPath,
+  readMangaRawJson
 } = require('../services/jsonService');
 
 const {
@@ -32,40 +33,6 @@ const normalize = (str = '') =>
     .trim();
 
 // ─────────────────────────────────────────────
-// SEARCH ENGINE
-// ─────────────────────────────────────────────
-
-let searchable = [];
-let fuse = null;
-
-function buildSearchIndex() {
-  const all = readMangaList();
-
-  searchable = all.map(manga => ({
-    ...manga,
-    normalizedTitle: normalize(manga.title),
-  }));
-
-  fuse = new Fuse(searchable, {
-    includeScore: true,
-    threshold: 0.2,
-    ignoreLocation: true,
-    minMatchCharLength: 2,
-    shouldSort: true,
-    findAllMatches: true,
-    useExtendedSearch: true,
-    keys: [
-      { name: 'normalizedTitle', weight: 1 },
-      { name: 'title', weight: 0.8 }
-    ]
-  });
-
-  console.log(`[SEARCH] Indexed ${searchable.length} mangas`);
-}
-
-buildSearchIndex();
-
-// ─────────────────────────────────────────────
 // GET /manga/list?p={page|all}
 // ─────────────────────────────────────────────
 
@@ -73,7 +40,7 @@ exports.list = asyncHandler(async (req, res) => {
   const p = req.query.p;
 
   if (p === 'all') {
-    return res.sendFile(path.join(getJSONPath('manga'), 'mangalist.json'));
+    return res.json(readMangaRawJson());
   }
 
   const page = Math.max(1, parseInt(p) || 1);
@@ -183,75 +150,3 @@ exports.info = asyncHandler(async (req, res) => {
   });
 });
 
-// ─────────────────────────────────────────────
-// POST /manga/search
-// ─────────────────────────────────────────────
-
-exports.search = asyncHandler(async (req, res) => {
-  const { query } = req.body;
-  if (!query?.trim()) {
-    return res.status(400).json({ error: 'Falta query' });
-  }
-
-  let results = [];
-  let limit = 20;
-
-  const match = query.trim().match(/^:\$([\w.]+):(.+)$/);
-
-  if (match) {
-    limit = Infinity;
-    const [, keyPath, rawValue] = match;
-    const targetValue = rawValue.trim().toLowerCase();
-
-    const filtered = searchable.filter(manga => {
-      const getValueByPath = (obj, path) => {
-        return path.split('.').reduce((acc, part) => {
-          if (!acc) return undefined;
-          const targetKey = Object.keys(acc).find(
-            k => k.toLowerCase() === part.toLowerCase()
-          );
-          return targetKey ? acc[targetKey] : undefined;
-        }, obj);
-      };
-
-      const mangaVal = getValueByPath(manga, keyPath);
-      if (mangaVal === undefined || mangaVal === null) return false;
-      if (typeof mangaVal === 'number') {
-        return mangaVal === Number(rawValue.trim());
-      }
-      return String(mangaVal).toLowerCase() === targetValue;
-    });
-
-    results = filtered.map(manga => ({ item: manga, score: 0 }));
-  } else {
-    const term = normalize(query);
-    results = fuse.search(term);
-  }
-
-  const unique = new Map();
-  for (const r of results) {
-    const id = Number(r.item.unit_id);
-    const current = unique.get(id);
-    if (!current || r.score < current.score) {
-      unique.set(id, r);
-    }
-  }
-
-  const finalResults = [...unique.values()]
-    .sort((a, b) => a.score - b.score)
-    .slice(0, limit)
-    .map(r => ({
-      title: r.item.title,
-      uid: Number(r.item.unit_id),
-      unit_id: Number(r.item.unit_id),
-      image: r.item.image,
-      score: r.score
-    }));
-
-  res.json(finalResults);
-});
-
-exports.rebuildSearch = asyncHandler(async (req, res) => {
-  buildSearchIndex();
-  res.json({ success: true, indexed: searchable.length });
-});

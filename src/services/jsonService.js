@@ -23,27 +23,41 @@ const rawMangaCache = new MemoryCache({ maxEntries: 10 });
 const itemMangaCache = new KeyCache({ ttlMs: 10 * 60 * 1000 }); // 10 min persistentes
 
 
+let inMemoryAnimeData = null;
+let inMemoryMangaData = null;
+
+function reloadMemoryData() {
+  try {
+    if (!fs.existsSync(ANIME_FILE)) {
+      inMemoryAnimeData = { metadata: {}, animes: [] };
+    } else {
+      inMemoryAnimeData = JSON.parse(fs.readFileSync(ANIME_FILE, 'utf8'));
+    }
+  } catch (err) {
+    console.error('[JSON SERVICE] Error leyendo JSON de animes:', err);
+    inMemoryAnimeData = { metadata: {}, animes: [] };
+  }
+
+  try {
+    if (!fs.existsSync(MANGA_FILE)) {
+      inMemoryMangaData = { metadata: {}, mangas: [] };
+    } else {
+      inMemoryMangaData = JSON.parse(fs.readFileSync(MANGA_FILE, 'utf8'));
+    }
+  } catch (err) {
+    console.error('[JSON SERVICE] Error leyendo JSON de mangas:', err);
+    inMemoryMangaData = { metadata: {}, mangas: [] };
+  }
+}
+
+// Carga inicial
+reloadMemoryData();
+
 /**
  * Lee el JSON completo y lo cachea en RAM
  */
 function readRawJson() {
-  const cacheKey = 'rawJson';
-  let data = rawCache.load(cacheKey);
-  if (data) return data;
-
-  try {
-    if (!fs.existsSync(ANIME_FILE)) {
-      data = { metadata: {}, animes: [] };
-    } else {
-      data = JSON.parse(fs.readFileSync(ANIME_FILE, 'utf8'));
-    }
-    // Guardamos en RAM por 5 segundos para no saturar el disco en peticiones concurrentes
-    rawCache.save(cacheKey, data, 5000);
-    return data;
-  } catch (err) {
-    console.error('[JSON SERVICE] Error leyendo JSON:', err);
-    return { metadata: {}, animes: [] };
-  }
+  return inMemoryAnimeData;
 }
 
 /**
@@ -122,22 +136,7 @@ function getAnimeByUnitId(unitId) {
  * Lee el JSON completo de Mangas y lo cachea en RAM
  */
 function readMangaRawJson() {
-  const cacheKey = 'rawMangaJson';
-  let data = rawMangaCache.load(cacheKey);
-  if (data) return data;
-
-  try {
-    if (!fs.existsSync(MANGA_FILE)) {
-      data = { metadata: {}, mangas: [] };
-    } else {
-      data = JSON.parse(fs.readFileSync(MANGA_FILE, 'utf8'));
-    }
-    rawMangaCache.save(cacheKey, data, 5000);
-    return data;
-  } catch (err) {
-    console.error('[JSON SERVICE] Error leyendo MANGA JSON:', err);
-    return { metadata: {}, mangas: [] };
-  }
+  return inMemoryMangaData;
 }
 
 /**
@@ -314,5 +313,6 @@ module.exports = {
   getJSONPath,
   readMangaRawJson,
   readMangaList,
-  getMangaByUnitId
+  getMangaByUnitId,
+  reloadMemoryData
 };

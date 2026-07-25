@@ -15,7 +15,8 @@ const LRU_DESCRIPTION_TTL = 60_000 * 5;
 const {
   getJSONPath,
   getAnimeByUnitId,
-  readAnimeList
+  readAnimeList,
+  readRawJson
 } = require('../services/jsonService');
 
 const {
@@ -41,40 +42,6 @@ const normalize = (str = '') =>
     .trim();
 
 // ─────────────────────────────────────────────
-// SEARCH ENGINE
-// ─────────────────────────────────────────────
-
-let searchable = [];
-let fuse = null;
-
-function buildSearchIndex() {
-  const all = readAnimeList();
-
-  searchable = all.map(anime => ({
-    ...anime,
-    normalizedTitle: normalize(anime.title),
-  }));
-
-  fuse = new Fuse(searchable, {
-    includeScore: true,
-    threshold: 0.2,
-    ignoreLocation: true,
-    minMatchCharLength: 2,
-    shouldSort: true,
-    findAllMatches: true,
-    useExtendedSearch: true,
-    keys: [
-      { name: 'normalizedTitle', weight: 1 },
-      { name: 'title', weight: 0.8 }
-    ]
-  });
-
-  console.log(`[SEARCH] Indexed ${searchable.length} animes`);
-}
-
-buildSearchIndex();
-
-// ─────────────────────────────────────────────
 // GET /anime/list?p={page|all}
 // ─────────────────────────────────────────────
 
@@ -82,7 +49,7 @@ exports.list = asyncHandler(async (req, res) => {
   const p = req.query.p;
 
   if (p === 'all') {
-    return res.sendFile(getJSONPath('anime_list.json'));
+    return res.json(readRawJson());
   }
 
   const page = Math.max(1, parseInt(p) || 1);
@@ -295,102 +262,6 @@ exports.rokuimg = (req, res) => {
 
   return proxyImage(imageUrl, res);
 };
-
-// ─────────────────────────────────────────────
-// SEARCH
-// ─────────────────────────────────────────────
-
-exports.search = asyncHandler(async (req, res) => {
-  const { query } = req.body;
-  if (!query?.trim()) {
-    return res.status(400).json({ error: 'Falta query' });
-  }
-
-  let results = [];
-  let limit = 20;
-
-  const match = query.trim().match(/^:\$([\w.]+):(.+)$/);
-
-  if (match) {
-    limit = Infinity;
-    const [, keyPath, rawValue] = match;
-    const targetValue = rawValue.trim().toLowerCase();
-
-    const filtered = searchable.filter(anime => {
-      const getValueByPath = (obj, path) => {
-        return path.split('.').reduce((acc, part) => {
-          if (!acc) return undefined;
-          const targetKey = Object.keys(acc).find(
-            k => k.toLowerCase() === part.toLowerCase()
-          );
-          return targetKey ? acc[targetKey] : undefined;
-        }, obj);
-      };
-
-      const animeVal = getValueByPath(anime, keyPath);
-      if (animeVal === undefined || animeVal === null) return false;
-      if (typeof animeVal === 'number') {
-        return animeVal === Number(rawValue.trim());
-      }
-      return String(animeVal).toLowerCase() === targetValue;
-    });
-
-    results = filtered.map(anime => ({ item: anime, score: 0 }));
-  } else {
-    const term = normalize(query);
-    results = fuse.search(term);
-
-    try {
-      const response = await fetch(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(term)}&limit=10`);
-      if (response.ok) {
-        const json = await response.json();
-        const aliases = [];
-        for (const anime of json.data) {
-          if (!anime.title) continue;
-          const n = normalize(anime.title);
-          if (n && !aliases.includes(n)) {
-            aliases.push(n);
-          }
-        }
-        for (const alias of aliases) {
-          const exactMatches = searchable.filter(a => a.normalizedTitle === alias);
-          for (const anime of exactMatches) {
-            results.push({ item: anime, score: 0 });
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[JIKAN]', err.message);
-    }
-  }
-
-  const unique = new Map();
-  for (const r of results) {
-    const id = Number(r.item.unit_id);
-    const current = unique.get(id);
-    if (!current || r.score < current.score) {
-      unique.set(id, r);
-    }
-  }
-
-  const finalResults = [...unique.values()]
-    .sort((a, b) => a.score - b.score)
-    .slice(0, limit)
-    .map(r => ({
-      title: r.item.title,
-      uid: Number(r.item.unit_id),
-      unit_id: Number(r.item.unit_id),
-      image: r.item.image,
-      score: r.score
-    }));
-
-  res.json(finalResults);
-});
-
-exports.rebuildSearch = asyncHandler(async (req, res) => {
-  buildSearchIndex();
-  res.json({ success: true, indexed: searchable.length });
-});
 
 exports.initmjs = asyncHandler(async (req, res) => {
   res.json({
