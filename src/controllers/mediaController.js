@@ -630,27 +630,46 @@ exports.reqProxy = asyncHandler(async (req, res) => {
   }
 });
 
+const { Readable } = require('stream');
+
 exports.proxy = asyncHandler(async (req, res) => {
   let u = req.query.url;
-  if (!u && req.query.gid) { try { u = Buffer.from(req.query.gid, 'base64url').toString('utf8'); } catch (e) { } }
+  if (!u && req.query.gid) {
+    try { u = Buffer.from(req.query.gid, 'base64url').toString('utf8'); } catch (e) { }
+  }
   if (!u) return res.status(400).json({ error: 'Falta url' });
 
   let r = req.query.ref;
-  if (!r && req.query.f) { try { r = Buffer.from(req.query.f, 'base64url').toString('utf8'); } catch (e) { } }
+  if (!r && req.query.f) {
+    try { r = Buffer.from(req.query.f, 'base64url').toString('utf8'); } catch (e) { }
+  }
 
-  const p = new URL(u), c = p.protocol === 'https:' ? https : http;
-  const o = { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': r || '' } };
+  try {
+    const response = await fetch(u, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': r || ''
+      },
+      redirect: 'follow' // Sigue las redirecciones automáticas (301, 302, etc.)
+    });
 
-  const rq = c.get(u, o, (pr) => {
-    res.writeHead(pr.statusCode, { 'Content-Type': 'video/MP2T', 'Access-Control-Allow-Origin': '*' });
+    if (!response.ok) {
+      return res.status(response.status).end();
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'video/MP2T',
+      'Access-Control-Allow-Origin': '*'
+    });
+
+    // Convertir el stream Web a NodeStream para poder usar .pipe()
     const cleaner = createVideoCleaner();
-    pr.pipe(cleaner).pipe(res);
-  });
+    Readable.fromWeb(response.body).pipe(cleaner).pipe(res);
 
-  rq.on('error', e => {
+  } catch (e) {
     console.error('[proxy]', e.message);
     if (!res.headersSent) res.status(502).end();
-  });
+  }
 });
 
 exports.download = (req, res) => downloadVideo(req, res);
