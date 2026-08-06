@@ -40,12 +40,19 @@ function getServerName(url) {
         return 'unknown';
     }
 }
+let lastWorkingDormp4ActionId = null;
+
 async function getdormp4($, purl, langFilter = null) {
     try {
         const actionIds = await getSR(purl);
 
         if (!actionIds || actionIds.length === 0) {
             return [];
+        }
+
+        let sortedActionIds = [...actionIds];
+        if (lastWorkingDormp4ActionId && sortedActionIds.includes(lastWorkingDormp4ActionId)) {
+            sortedActionIds.sort((a, b) => (a === lastWorkingDormp4ActionId ? -1 : b === lastWorkingDormp4ActionId ? 1 : 0));
         }
 
         const htmlContent = $.html();
@@ -67,7 +74,7 @@ async function getdormp4($, purl, langFilter = null) {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0'
         };
 
-        const promises = actionIds.map(async (actionId) => {
+        const promises = sortedActionIds.map(async (actionId) => {
             const response = await axios.post(purl, payload, {
                 headers: { ...headers, 'Next-Action': actionId },
                 validateStatus: () => true,
@@ -100,6 +107,7 @@ async function getdormp4($, purl, langFilter = null) {
                 throw new Error('Invalid action');
             }
 
+            lastWorkingDormp4ActionId = actionId;
             controller.abort();
             return response.data;
         });
@@ -108,7 +116,55 @@ async function getdormp4($, purl, langFilter = null) {
         try {
             rawData = await Promise.any(promises);
         } catch {
-            return [];
+            lastWorkingDormp4ActionId = null;
+            const freshActionIds = await getSR(purl, true);
+            if (freshActionIds && freshActionIds.length > 0) {
+                const freshPromises = freshActionIds.map(async (actionId) => {
+                    const response = await axios.post(purl, payload, {
+                        headers: { ...headers, 'Next-Action': actionId },
+                        validateStatus: () => true,
+                        signal: controller.signal
+                    });
+
+                    const txt = typeof response.data === 'string'
+                        ? response.data
+                        : JSON.stringify(response.data);
+
+                    const esValido = response.status === 200 && txt.includes('LinksOnline');
+                    const tieneCabecera = txt.startsWith('0:{"a":"$@1"');
+                    const tieneLinks = /1:\[\s*\{/.test(txt);
+
+                    const tieneErrores =
+                        txt.includes('1:"$undefined"') ||
+                        txt.includes('1:[]') ||
+                        txt.includes('1:{"ok":false') ||
+                        txt.includes('"digest":"') ||
+                        txt.includes('"error"') ||
+                        txt.includes('"message":"') ||
+                        txt.includes('NEXT_NOT_FOUND') ||
+                        txt.includes('Internal Server Error') ||
+                        txt.includes('Cannot read') ||
+                        txt.includes('Unhandled Runtime Error');
+
+                    const invalido = !esValido || !tieneCabecera || !tieneLinks || tieneErrores;
+
+                    if (invalido) {
+                        throw new Error('Invalid action');
+                    }
+
+                    lastWorkingDormp4ActionId = actionId;
+                    controller.abort();
+                    return response.data;
+                });
+
+                try {
+                    rawData = await Promise.any(freshPromises);
+                } catch {
+                    return [];
+                }
+            } else {
+                return [];
+            }
         }
 
         const textData = typeof rawData === 'string' ? rawData : JSON.stringify(rawData);

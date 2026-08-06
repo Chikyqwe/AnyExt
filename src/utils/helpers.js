@@ -11,6 +11,7 @@ const httpNative = require('http');
 const httpsNative = require('https');
 const genmap = require("./maps/map.json")
 const { axiosGet } = require('../core/helpersCore');
+const { getSR } = require('../core/models/basic_models/helpers/sr');
 
 // ============================================================================
 // MÓDULO: HTTP / AXIOS
@@ -1053,10 +1054,6 @@ const ScraperModule = (() => {
 
     const html = await (await fetch(URLd)).text();
 
-    const scripts = [...html.matchAll(/<script\b[^>]*src=["']([^"']+)["']/gi)]
-      .map(m => m[1].startsWith("http") ? m[1] : BASE + m[1]);
-
-    const ids = new Set();
     const sid = new Set();
     const seasons = new Set();
 
@@ -1068,25 +1065,14 @@ const ScraperModule = (() => {
       seasons.add(match[1]);
     }
 
-    await Promise.all(
-      scripts.map(async (url) => {
-        try {
-          const js = await (await fetch(url)).text();
-          for (const match of js.matchAll(/createServerReference\)\("([^"]+)"/g)) {
-            ids.add(match[1]);
-          }
-        } catch (e) { }
-      })
-    );
-
-    const IDS = [...ids];
+    const IDS = await getSR(URLd);
     const serieIdEncontrado = [...sid][0] || "";
     // Ordenamos las temporadas numéricamente para procesarlas en orden correcto
     const temporadasEncontradas = seasons.size > 0
       ? [...seasons].sort((a, b) => parseInt(a) - parseInt(b))
       : ["1"];
 
-    if (!serieIdEncontrado) return null;
+    if (!serieIdEncontrado || !IDS || IDS.length === 0) return null;
 
     const titleMatch = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/);
     const title = titleMatch ? titleMatch[1].replace(/<!-- -->/g, "").trim() : "";
@@ -1160,7 +1146,7 @@ const ScraperModule = (() => {
       return null;
     }
 
-    const actionIdValido = await Promise.any(
+    let actionIdValido = await Promise.any(
       IDS.map(async (id) => {
         const res = await probarSeason(id, temporadasEncontradas[0]);
         if (res) return res.id;
@@ -1168,14 +1154,26 @@ const ScraperModule = (() => {
       })
     ).catch(() => null);
 
+    if (!actionIdValido) {
+      const freshIDS = await getSR(URLd, true);
+      if (freshIDS && freshIDS.length > 0) {
+        actionIdValido = await Promise.any(
+          freshIDS.map(async (id) => {
+            const res = await probarSeason(id, temporadasEncontradas[0]);
+            if (res) return res.id;
+            throw new Error();
+          })
+        ).catch(() => null);
+      }
+    }
+
     if (!actionIdValido) return null;
 
-    // Procesamos secuencialmente o mantenemos el orden para acumular el conteo global
-    const resultados = [];
-    for (const season of temporadasEncontradas) {
-      const r = await probarSeason(actionIdValido, season);
-      if (r) resultados.push(r);
-    }
+    // Procesamos en paralelo las temporadas
+    const seasonResults = await Promise.all(
+      temporadasEncontradas.map(season => probarSeason(actionIdValido, season))
+    );
+    const resultados = seasonResults.filter(Boolean);
 
     let contadorGlobal = 0;
     const formattedEpisodes = [];
@@ -1243,9 +1241,23 @@ const ScraperModule = (() => {
 // ============================================================================
 // FUNCIONES PÚBLICAS
 // ============================================================================
+const episodesCache = new Map();
+const EPISODES_CACHE_TTL = 15 * 60 * 1000;
+
+const descriptionCache = new Map();
+const DESC_CACHE_TTL = 30 * 60 * 1000;
+
 async function getEpisodes(url) {
   if (!url) {
     return { success: false, error: 'URL vacía' };
+  }
+
+  const now = Date.now();
+  if (episodesCache.has(url)) {
+    const cached = episodesCache.get(url);
+    if (now - cached.ts < EPISODES_CACHE_TTL && cached.data) {
+      return cached.data;
+    }
   }
 
   try {
@@ -1260,64 +1272,46 @@ async function getEpisodes(url) {
     });
     const host = new URL(url).hostname;
 
-    // 🔥 Regex exactos (sin colisiones)
+    let result;
 
     if (/animeflv\.one$/.test(host)) {
-      return ScraperModule.extractone(data);
+      result = await ScraperModule.extractone(data);
+    } else if (/animeflv\.net$/.test(host)) {
+      result = await ScraperModule.extractAnimeFLV(data);
+    } else if (/tioanime\./.test(host)) {
+      result = await ScraperModule.extractTio(data);
+    } else if (/hentaila\./.test(host)) {
+      result = await ScraperModule.extractHentaila(data);
+    } else if (/jkanime\./.test(host)) {
+      result = await ScraperModule.extractJK(url);
+    } else if (/aniyae\./.test(host)) {
+      result = await ScraperModule.extractAniyae(data);
+    } else if (/tiohentai\./.test(host)) {
+      result = await ScraperModule.extractTioHentai(data);
+    } else if (/zonatmo\.net$/.test(host)) {
+      result = await ScraperModule.extractTmonet(url);
+    } else if (/mangalect\.org$/.test(host)) {
+      result = await ScraperModule.extractesp(data);
+    } else if (/olympusxyz\./.test(host)) {
+      result = await ScraperModule.extractoly(url, data);
+    } else if (/zonatmo\.org$/.test(host)) {
+      result = await ScraperModule.extractTmo(data, url);
+    } else if (/doramaslat\./.test(host)) {
+      result = await ScraperModule.extractdorlat(data);
+    } else if (/doramasmp4\./.test(host)) {
+      result = await ScraperModule.extractdormp4(url);
+    } else {
+      result = {
+        success: false,
+        error: `No hay extractor para host: ${host}`
+      };
     }
 
-    if (/animeflv\.net$/.test(host)) {
-      return ScraperModule.extractAnimeFLV(data);
+    if (result && (result.episodes?.length || result.chapters?.length)) {
+      episodesCache.set(url, { data: result, ts: now });
     }
 
-    if (/tioanime\./.test(host)) {
-      return ScraperModule.extractTio(data);
-    }
-
-    if (/hentaila\./.test(host)) {
-      return ScraperModule.extractHentaila(data);
-    }
-
-    if (/jkanime\./.test(host)) {
-      return ScraperModule.extractJK(url);
-    }
-
-    if (/aniyae\./.test(host)) {
-      return ScraperModule.extractAniyae(data);
-    }
-
-    if (/tiohentai\./.test(host)) {
-      return ScraperModule.extractTioHentai(data);
-    }
-
-    if (/zonatmo\.net$/.test(host)) {
-      return ScraperModule.extractTmonet(url);
-    };
-
-    if (/mangalect\.org$/.test(host)) {
-      return ScraperModule.extractesp(data);
-    };
-
-    if (/olympusxyz\./.test(host)) {
-      return ScraperModule.extractoly(url, data);
-    };
-
-    if (/zonatmo\.org$/.test(host)) {
-      return ScraperModule.extractTmo(data, url);
-    };
-
-    if (/doramaslat\./.test(host)) {
-      return ScraperModule.extractdorlat(data);
-    };
-
-    if (/doramasmp4\./.test(host)) {
-      return ScraperModule.extractdormp4(url)
-    };
-
-    return {
-      success: false,
-      error: `No hay extractor para host: ${host}`
-    };
+    return result;
 
   } catch (err) {
     console.error('[getEpisodes ERROR]', err.message);
@@ -1332,6 +1326,14 @@ async function getEpisodes(url) {
 
 async function getDescription(url) {
   if (!url) return '';
+
+  const now = Date.now();
+  if (descriptionCache.has(url)) {
+    const cached = descriptionCache.get(url);
+    if (now - cached.ts < DESC_CACHE_TTL) {
+      return cached.data;
+    }
+  }
 
   try {
     const { data } = await HttpModule.axiosInstance.get(url, {
@@ -1449,12 +1451,15 @@ async function getDescription(url) {
 
     // fallback genérico (usado por JKAnime y cualquier nuevo sitio sin extractor específico)
     const fallbackText = $('p').map((_, el) => $(el).text().trim()).get().find(t => !esBasura(t));
-    if (fallbackText) return fallbackText;
-
-    // Último intento: selectores aproximados de sinopsis comunes en la web
-    return $('[class*="sinopsis"] p').first().text().trim() ||
+    const resultText = fallbackText ||
+      $('[class*="sinopsis"] p').first().text().trim() ||
       $('[class*="sinopsis"]').first().text().trim() ||
       '';
+
+    if (resultText) {
+      descriptionCache.set(url, { data: resultText, ts: now });
+    }
+    return resultText;
 
   } catch (e) {
     console.error(`[getDescription ERROR - ${url}]:`, e.message);
