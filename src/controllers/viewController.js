@@ -1,9 +1,10 @@
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
+const asyncHandler = require('../middlewares/asyncHandler');
 const STATIC_SERVER_URL = process.env.STATIC_SERVER_URL;
 
-async function getFile(filename, l) {
+exports.getFile = async (filename, l) => {
     let content = '';
     let status = 200;
 
@@ -33,6 +34,45 @@ async function getFile(filename, l) {
     }
 
     return { content, status };
-}
+};
+exports.initmjs = asyncHandler(async (req, res) => {
+    res.json({
+        mjs: 'This is the AnyExt API, please return to the main page.',
+        web: 'https://anyext.qzz.io/',
+        date: new Date().toISOString()
+    });
+});
 
-module.exports = { getFile }
+exports.reqPostProxy = asyncHandler(async (req, res) => {
+    const targetUrlStr = req.query.u;
+
+    if (!targetUrlStr) {
+        return res.status(400).json({ error: true, message: 'Parámetro "u" obligatorio' });
+    }
+
+    try {
+        const targetUrl = new URL(targetUrlStr);
+
+        // Extraemos todos los parametros de la query URL y los convertimos en objeto Body
+        const bodyData = {};
+        targetUrl.searchParams.forEach((value, key) => {
+            bodyData[key] = value;
+        });
+
+        // La URL limpia sin querystring
+        const cleanUrl = `${targetUrl.origin}${targetUrl.pathname}`;
+
+        // Hacemos la petición POST interna con los parámetros extraídos
+        const response = await fetch(cleanUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bodyData)
+        });
+
+        const data = await response.json();
+        return res.status(response.status).json(data);
+
+    } catch (e) {
+        return res.status(400).json({ error: true, message: 'URL inválida o error en reenvío', details: e.message });
+    }
+});

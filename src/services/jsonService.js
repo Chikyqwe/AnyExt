@@ -3,30 +3,41 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { JSON_FOLDER, ANIME_FILE, MANGA_FILE } = require('../config');
+// Asegúrate de definir DRAMA_FILE en '../config' si aplica, o se construirá usando path.join más abajo.
+const { JSON_FOLDER, ANIME_FILE, MANGA_FILE, DRAMA_FILE } = require('../config');
 
 // Importamos las nuevas clases de caché
 const { KeyCache, MemoryCache } = require('../core/cache/cache');
 
+// Ruta por defecto para el JSON de Drama en caso de que DRAMA_FILE no esté en config
+const resolvedDramaFile = DRAMA_FILE
 /**
  * Modernización: 
  * Usamos MemoryCache para el JSON bruto (acceso ultra rápido).
- * Usamos KeyCache para los animes individuales por ID (persisten comprimidos).
+ * Usamos KeyCache para los elementos individuales por ID (persisten comprimidos).
  */
 const rawCache = new MemoryCache({ maxEntries: 10 });
 const itemCache = new KeyCache({ ttlMs: 10 * 60 * 1000 }); // 10 min persistentes
 
+// Garantizar directorios
 if (!fs.existsSync(JSON_FOLDER)) fs.mkdirSync(JSON_FOLDER, { recursive: true });
 if (!fs.existsSync(path.join(JSON_FOLDER, 'manga'))) fs.mkdirSync(path.join(JSON_FOLDER, 'manga'), { recursive: true });
+if (!fs.existsSync(path.join(JSON_FOLDER, 'drama'))) fs.mkdirSync(path.join(JSON_FOLDER, 'drama'), { recursive: true });
 
+// Cachés de Manga
 const rawMangaCache = new MemoryCache({ maxEntries: 10 });
-const itemMangaCache = new KeyCache({ ttlMs: 10 * 60 * 1000 }); // 10 min persistentes
+const itemMangaCache = new KeyCache({ ttlMs: 10 * 60 * 1000 });
 
+// Cachés de Drama
+const rawDramaCache = new MemoryCache({ maxEntries: 10 });
+const itemDramaCache = new KeyCache({ ttlMs: 10 * 60 * 1000 });
 
 let inMemoryAnimeData = null;
 let inMemoryMangaData = null;
+let inMemoryDramaData = null;
 
 function reloadMemoryData() {
+  // Cargar Animes
   try {
     if (!fs.existsSync(ANIME_FILE)) {
       inMemoryAnimeData = { metadata: {}, animes: [] };
@@ -38,6 +49,7 @@ function reloadMemoryData() {
     inMemoryAnimeData = { metadata: {}, animes: [] };
   }
 
+  // Cargar Mangas
   try {
     if (!fs.existsSync(MANGA_FILE)) {
       inMemoryMangaData = { metadata: {}, mangas: [] };
@@ -47,6 +59,18 @@ function reloadMemoryData() {
   } catch (err) {
     console.error('[JSON SERVICE] Error leyendo JSON de mangas:', err);
     inMemoryMangaData = { metadata: {}, mangas: [] };
+  }
+
+  // Cargar Dramas
+  try {
+    if (!fs.existsSync(resolvedDramaFile)) {
+      inMemoryDramaData = { metadata: {}, dramas: [] };
+    } else {
+      inMemoryDramaData = JSON.parse(fs.readFileSync(resolvedDramaFile, 'utf8'));
+    }
+  } catch (err) {
+    console.error('[JSON SERVICE] Error leyendo JSON de dramas:', err);
+    inMemoryDramaData = { metadata: {}, dramas: [] };
   }
 }
 
@@ -104,29 +128,24 @@ function getAnimeByUnitId(unitId) {
   const animeList = readAnimeList();
   if (!animeList || animeList.length === 0) return { error: true, message: "No hay datos disponibles" };
 
-  // 1. Intentar buscar la coincidencia exacta
   let anime = animeList.find(a => a.unit_id === numId);
 
-  // Si se encuentra el exacto, lo guardamos en caché y lo devolvemos directamente
   if (anime) {
     itemCache.save(cacheKey, anime);
     return anime;
   }
 
-  // 2. Si no existe, buscar el más cercano para recomendar
   const closestAnime = animeList.reduce((closest, current) => {
     const currentDiff = Math.abs(current.unit_id - numId);
     const closestDiff = Math.abs(closest.unit_id - numId);
     return currentDiff < closestDiff ? current : closest;
   });
 
-  // 3. Estructurar la respuesta de error con la recomendación
   const errorResponse = {
     error: true,
     recommendedId: closestAnime.unit_id
   };
 
-  // Guardamos también el error en caché para que no repita la búsqueda pesada
   itemCache.save(cacheKey, errorResponse);
 
   return errorResponse;
@@ -183,6 +202,60 @@ function getMangaByUnitId(unitId) {
   return errorResponse;
 }
 
+// ==========================================
+// 🎭 FUNCIONES PARA DRAMA
+// ==========================================
+
+/**
+ * Lee el JSON completo de Dramas en RAM
+ */
+function readDramaRawJson() {
+  return inMemoryDramaData;
+}
+
+/**
+ * Devuelve la lista de dramas
+ */
+function readDramaList() {
+  return readDramaRawJson().doramas || [];
+}
+
+/**
+ * Busca drama por unit_id, usa KeyCache
+ */
+function getDramaByUnitId(unitId) {
+  const numId = parseInt(unitId, 10);
+  if (isNaN(numId)) return { error: true, message: "ID inválido" };
+
+  const cacheKey = `dramaUnitId:${numId}`;
+  let cachedResponse = itemDramaCache.load(cacheKey);
+  if (cachedResponse) return cachedResponse;
+
+  const dramaList = readDramaList();
+  if (!dramaList || dramaList.length === 0) return { error: true, message: "No hay datos disponibles" };
+
+  let drama = dramaList.find(d => d.unit_id === numId);
+
+  if (drama) {
+    itemDramaCache.save(cacheKey, drama);
+    return drama;
+  }
+
+  const closestDrama = dramaList.reduce((closest, current) => {
+    const currentDiff = Math.abs(current.unit_id - numId);
+    const closestDiff = Math.abs(closest.unit_id - numId);
+    return currentDiff < closestDiff ? current : closest;
+  });
+
+  const errorResponse = {
+    error: true,
+    recommendedId: closestDrama.unit_id
+  };
+
+  itemDramaCache.save(cacheKey, errorResponse);
+
+  return errorResponse;
+}
 
 /**
  * Construye URL de episodio según mirror
@@ -197,7 +270,6 @@ async function buildEpisodeUrl(anime, ep, mirror = 1) {
   }
 
   switch (m) {
-    // 🔵 FLV
     case 1:
       if (anime.sources.FLV) {
         return anime.sources.FLV.replace('/anime/', '/ver/') + `-${e}`;
@@ -208,7 +280,6 @@ async function buildEpisodeUrl(anime, ep, mirror = 1) {
         return anime.sources.ONE.replace('/anime/', '/ver/') + `-${e}`;
       }
       break;
-    // 🟣 TIOANIME / TIOHENTAI
     case 3:
       if (anime.sources.TIO) {
         let url = anime.sources.TIO;
@@ -220,23 +291,16 @@ async function buildEpisodeUrl(anime, ep, mirror = 1) {
         }
       }
       break;
-
-    // 🟡 JKANIME
     case 4:
       if (anime.sources.JK) {
         return anime.sources.JK + `${e}/`;
       }
       break;
-
-    // 🔴 ANIYAE
     case 5:
       if (anime.sources.ANIYAE) {
         const { data: html } = await axios.get(anime.sources.ANIYAE);
         const $ = cheerio.load(html);
 
-        // ===============================
-        // 1️⃣ EXTRAER animeId DESDE SCRIPT
-        // ===============================
         let animeId = null;
 
         $('script').each((i, el) => {
@@ -251,28 +315,19 @@ async function buildEpisodeUrl(anime, ep, mirror = 1) {
 
         if (!animeId) throw new Error("❌ No se encontró animeId");
 
-        // ===============================
-        // 6️⃣ API EPISODIOS
-        // ===============================
         const api = `https://open.aniyae.net/wp-json/kiranime/v1/anime/${animeId}/episodes?page=1&per_page=999999999&order=asc`;
 
         const res = await axios.get(api);
         const epsArray = res.data.episodes || [];
-        // ===============================
-        // 9️⃣ RESULTADO FINAL
-        // ===============================
+
         return epsArray[e - 1].url;
       }
       break;
-
-    // 🟠 HENTAILA
     case 6:
       if (anime.sources.HENTAILA) {
         return anime.sources.HENTAILA + `/${e}`;
       }
       break;
-
-    // ⚫ TIOHENTAI directo
     case 7:
       if (anime.sources.TIOHENTAI) {
         return anime.sources.TIOHENTAI.replace('/hentai/', '/ver/') + `-${e}`;
@@ -314,5 +369,8 @@ module.exports = {
   readMangaRawJson,
   readMangaList,
   getMangaByUnitId,
+  readDramaRawJson,
+  readDramaList,
+  getDramaByUnitId,
   reloadMemoryData
 };

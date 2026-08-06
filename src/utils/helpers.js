@@ -68,6 +68,252 @@ const PatternModule = (() => {
 
   return { getAnimeFLVPattern, getTioPattern };
 })();
+// ============================================================================
+// MÓDULO: STREAMING / PROXY
+// ============================================================================
+const StreamModule = (() => {
+
+  function getRefererForHost(host) {
+    if (!host) return 'https://www.mp4upload.com/';
+    if (host.includes('burstcloud')) return 'https://burstcloud.co/';
+    if (host.includes('vidcache')) return 'https://www.yourupload.com/';
+    if (host.includes('mp4upload')) return 'https://www.mp4upload.com/';
+    if (host.includes('ok')) return 'https://ok.ru'
+    return 'https://ok.ru';
+  }
+
+  function validateVideoUrl(videoUrl, timeoutMs = 5000) {
+    return new Promise((resolve) => {
+      let redirects = 0;
+      const maxRedirects = 5;
+      let resolved = false;
+      const logs = [];
+
+      const pushLog = (type, data) => logs.push({ time: new Date().toISOString(), type, data });
+      const finish = (data) => { if (resolved) return; resolved = true; resolve({ ...data, log: logs }); };
+
+      const doRequest = (currentUrl, method = 'HEAD') => {
+        pushLog('request', { url: currentUrl, method });
+        const u = urlLib.parse(currentUrl);
+        const isHttps = u.protocol === 'https:';
+        const agent = isHttps
+          ? new https.Agent({ keepAlive: true, servername: u.hostname, rejectUnauthorized: false })
+          : undefined;
+
+        const options = {
+          method, hostname: u.hostname,
+          port: u.port || (isHttps ? 443 : 80),
+          path: (u.pathname || '/') + (u.search || ''),
+          headers: {
+            Referer: 'https://www.yourupload.com/', 'User-Agent': 'Mozilla/5.0',
+            ...(method === 'GET' ? { Range: 'bytes=0-1023' } : {})
+          },
+          agent, timeout: timeoutMs
+        };
+
+        const proto = isHttps ? https : http;
+        const req = proto.request(options, (res) => {
+          pushLog('response', { statusCode: res.statusCode, headers: res.headers });
+
+          if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+            if (++redirects > maxRedirects) return finish({ ok: false, reason: 'too_many_redirects' });
+            const nextUrl = urlLib.resolve(currentUrl, res.headers.location);
+            return doRequest(nextUrl, method);
+          }
+
+          const contentType = res.headers['content-type'] || '';
+          const contentLength = Number(res.headers['content-length'] || 0);
+          const isVideo = contentType.startsWith('video/') || contentType.includes('octet-stream');
+
+          let reason;
+          if (![200, 206].includes(res.statusCode)) reason = 'bad_status_code';
+          else if (!isVideo) reason = 'not_video_mime';
+          else if (contentLength <= 0) reason = 'empty_or_unknown_size';
+          else reason = 'ok';
+
+          finish({ ok: reason === 'ok', statusCode: res.statusCode, contentType, contentLength, finalUrl: currentUrl, reason });
+        });
+
+        req.on('error', (err) => {
+          pushLog('error', { method, message: err.message, code: err.code });
+          if (method === 'HEAD') return doRequest(currentUrl, 'GET');
+          finish({ ok: false, reason: 'request_error' });
+        });
+
+        req.on('timeout', () => {
+          req.destroy();
+          finish({ ok: false, reason: 'timeout' });
+        });
+
+        req.end();
+      };
+
+      doRequest(videoUrl);
+    });
+  }
+
+  async function proxyImage(url, res) {
+    const controller = new AbortController();
+    try {
+      const r = await HttpModule.axiosInstance.get(url, { responseType: 'stream', signal: controller.signal });
+      res.setHeader('Content-Type', r.headers['content-type'] || 'image/jpeg');
+      const stream = r.data;
+      const cleanup = () => { controller.abort(); stream.destroy(); };
+      res.on('close', cleanup);
+      res.on('error', cleanup);
+      stream.on('error', cleanup);
+      stream.pipe(res);
+    } catch {
+      res.headersSent ? res.end() : res.status(500).end();
+    }
+  }
+
+  function streamVideo(videoUrl, req, res) {
+    if (!videoUrl) return res.status(400).send('Falta parámetro videoUrl');
+    const referer = getRefererForHost(videoUrl);
+    // CORS
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+
+    const parsedUrl = urlLib.parse(videoUrl);
+    const isHttps = parsedUrl.protocol === 'https:';
+    const protocol = isHttps ? https : http;
+
+
+    // Offset inicial desde el header Range del cliente
+    let byteOffset = 0;
+    const rangeHeader = req.headers.range;
+    if (rangeHeader) {
+      const m = rangeHeader.match(/bytes=(\d+)-/);
+      if (m) byteOffset = parseInt(m[1], 10);
+    }
+
+    let done = false;
+    let retries = 0;
+    const MAX_RETRIES = 3;
+    const RETRY_BASE_MS = 800;
+
+    function terminate(code, msg) {
+      if (done) return;
+      done = true;
+      if (!res.headersSent) {
+        res.status(code).send(msg ?? '');
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    }
+
+    req.once('close', () => { done = true; });
+
+    function connect(fromByte) {
+      if (done) return;
+
+      const reqHeaders = {
+        'Referer': referer,
+        'Origin': referer,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        // Opcional pero recomendado para streaming
+        'Accept': '*/*',
+        'Accept-Encoding': 'identity',
+      };
+
+      // Si hay un byte offset mayor a 0 o queremos asegurar compatibilidad con rangos
+      if (fromByte > 0) {
+        reqHeaders['Range'] = `bytes=${fromByte}-`;
+      }
+
+      const options = {
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (isHttps ? 443 : 80),
+        path: (parsedUrl.pathname || '/') + (parsedUrl.search || ''),
+        method: 'GET',
+        headers: reqHeaders,
+        rejectUnauthorized: false,
+      };
+
+      const originReq = protocol.request(options, (originRes) => {
+        if (done) { originRes.resume(); return; }
+
+        retries = 0;
+
+        // Si el servidor de origen rechaza la petición
+        if (originRes.statusCode >= 400) {
+          console.error(`[streamVideo] Origen respondió con HTTP ${originRes.statusCode} para la URL: ${videoUrl}`);
+          originRes.resume();
+          return terminate(originRes.statusCode, 'Video no disponible o enlace expirado');
+        }
+
+        if (!res.headersSent) {
+          const outHeaders = {
+            'Content-Type': 'video/mp4',
+            'Accept-Ranges': 'bytes',
+            'Content-Disposition': 'inline',
+          };
+          if (originRes.headers['content-length'])
+            outHeaders['Content-Length'] = originRes.headers['content-length'];
+          if (originRes.headers['content-range'])
+            outHeaders['Content-Range'] = originRes.headers['content-range'];
+
+          res.writeHead(originRes.statusCode === 206 ? 206 : 200, outHeaders);
+        }
+
+        originRes.on('data', (chunk) => {
+          if (done) { originRes.destroy(); return; }
+
+          byteOffset += chunk.length;
+
+          const ok = res.write(chunk);
+          if (!ok) {
+            originRes.pause();
+            res.once('drain', () => {
+              if (!done) originRes.resume();
+            });
+          }
+        });
+
+        originRes.once('end', () => {
+          terminate(200, null);
+        });
+
+        originRes.once('error', (err) => {
+          if (done) return;
+          retry(byteOffset, `originRes: ${err.message}`);
+        });
+      });
+
+      originReq.setTimeout(25000, () => {
+        originReq.destroy(new Error('timeout'));
+      });
+
+      originReq.once('error', (err) => {
+        if (done) return;
+        retry(byteOffset, `originReq: ${err.message}`);
+      });
+
+      originReq.end();
+    }
+
+    function retry(fromByte, reason) {
+      if (done) return;
+
+      retries++;
+      if (retries > MAX_RETRIES) {
+        console.error(`[streamVideo] sin más reintentos — ${reason}`);
+        return terminate(502, 'Error al conectar con el origen del video');
+      }
+
+      const delay = RETRY_BASE_MS * retries;
+      console.warn(`[streamVideo] reintento ${retries}/${MAX_RETRIES} en ${delay}ms — ${reason}`);
+      setTimeout(() => connect(fromByte), delay);
+    }
+
+    connect(byteOffset);
+  }
+
+  return { validateVideoUrl, proxyImage, streamVideo };
+})();
 
 // ============================================================================
 // MÓDULO: SCRAPERS
@@ -137,7 +383,8 @@ const ScraperModule = (() => {
     return {
       source: 'TIO', title: anime_info[2], slug: anime_info[1],
       animeId: anime_info[0], isNewEP: anime_info[3],
-      isEnd: anime_info.length === 3, episodes_count: episodes.length, episodes, tags
+      isEnd: anime_info.length === 3, episodes_count: episodes.length, episodes, langs: "JP",
+      subtitles: "ES", tags
     };
   }
 
@@ -187,6 +434,8 @@ const ScraperModule = (() => {
       isEnd,
       episodes_count: episodes.length,
       episodes,
+      langs: "JP",
+      subtitles: "ES",
       tags
     };
   }
@@ -278,6 +527,8 @@ const ScraperModule = (() => {
       isEnd,
       episodes_count: allEpisodes.length,
       episodes: allEpisodes,
+      langs: "JP",
+      subtitles: "ES",
       tags
     };
   }
@@ -368,6 +619,8 @@ const ScraperModule = (() => {
       isNewEP,
       episodes_count: episodes.length,
       episodes,
+      langs: "JP",
+      subtitles: "ES",
       tags
     };
   }
@@ -436,6 +689,8 @@ const ScraperModule = (() => {
       isEnd,
       episodes_count: episodes.length,
       episodes,
+      langs: "JP",
+      subtitles: "ES",
       tags
     };
   }
@@ -739,6 +994,235 @@ const ScraperModule = (() => {
       tags
     };
   }
+  function extractdorlat(html) {
+    const $ = cheerio.load(html);
+    const data = {
+      source: 'dorlat',
+      title: '',
+      slug: '',
+      isEnd: false,
+      episodes_count: 0,
+      lang: "LAT",
+      isNewEP: '',
+      tags: [],
+      episodes: []
+    };
+
+    data.title = $('h1').text().trim() || $('title').text().trim();
+
+    const canonical = $('link[rel="canonical"]').attr('href') || '';
+    if (canonical) {
+      data.slug = canonical.split('/').filter(Boolean).pop();
+    }
+
+    const infoText = $('.sheader .data').text().toLowerCase();
+    data.isEnd = infoText.includes('finalizado');
+
+    $('.sgeneros a').each((_, el) => {
+      data.tags.push($(el).text().trim());
+    });
+
+    let epCounter = 1;
+    $('.se-c').each((_, seasonEl) => {
+      $(seasonEl).find('.episodios li').each((_, epEl) => {
+        const number = epCounter++;
+        const url = $(epEl).find('a').attr('href') || '';
+        const image = $(epEl).find('img').attr('src') || '';
+
+        if (url) {
+          data.episodes.push({
+            number,
+            url,
+            image
+          });
+        }
+      });
+    });
+
+    data.episodes_count = data.episodes.length;
+
+    if (data.episodes_count > 0) {
+      data.isNewEP = data.episodes[data.episodes_count - 1].number;
+    }
+
+    return data;
+  }
+  async function extractdormp4(URLd) {
+    const MAX_REINTENTOS = 5;
+    const BASE = "https://doramasmp4.io";
+
+    const html = await (await fetch(URLd)).text();
+
+    const scripts = [...html.matchAll(/<script\b[^>]*src=["']([^"']+)["']/gi)]
+      .map(m => m[1].startsWith("http") ? m[1] : BASE + m[1]);
+
+    const ids = new Set();
+    const sid = new Set();
+    const seasons = new Set();
+
+    for (const match of html.matchAll(/\\?["']serie_id\\?["']\s*:\s*\\?["']([^"'\\]+)\\?["']/g)) {
+      sid.add(match[1]);
+    }
+
+    for (const match of html.matchAll(/aria-controls=["'][^"']*season-panel-(\d+)["']/g)) {
+      seasons.add(match[1]);
+    }
+
+    await Promise.all(
+      scripts.map(async (url) => {
+        try {
+          const js = await (await fetch(url)).text();
+          for (const match of js.matchAll(/createServerReference\)\("([^"]+)"/g)) {
+            ids.add(match[1]);
+          }
+        } catch (e) { }
+      })
+    );
+
+    const IDS = [...ids];
+    const serieIdEncontrado = [...sid][0] || "";
+    // Ordenamos las temporadas numéricamente para procesarlas en orden correcto
+    const temporadasEncontradas = seasons.size > 0
+      ? [...seasons].sort((a, b) => parseInt(a) - parseInt(b))
+      : ["1"];
+
+    if (!serieIdEncontrado) return null;
+
+    const titleMatch = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/);
+    const title = titleMatch ? titleMatch[1].replace(/<!-- -->/g, "").trim() : "";
+
+    const statusMatch = html.match(/Estado<\/dt>\s*<dd[^>]*>([\s\S]*?)<\/dd>/);
+    const estadoTxt = statusMatch ? statusMatch[1].replace(/<!-- -->/g, "").trim().toLowerCase() : "";
+    const isEnd = estadoTxt.includes("finalizado") || estadoTxt.includes("terminado");
+
+    const epsMatch = html.match(/Episodios<\/dt>\s*<dd[^>]*>([\s\S]*?)<\/dd>/);
+    const episodes_count = epsMatch ? parseInt(epsMatch[1].replace(/\D/g, "")) || 0 : 0;
+
+    const tags = [...html.matchAll(/\/generos\/([^"'<>]+)/g)].map(m => {
+      let tag = m[1];
+      while (tag.endsWith('\\') || tag.endsWith('\\')) {
+        tag = tag.slice(0, -1);
+      }
+      return tag.charAt(0).toUpperCase() + tag.slice(1);
+    });
+
+    const audioLanguages = [];
+    const audioSectionMatch = html.match(/Idiomas de\s*audio<\/span>([\s\S]*?)<\/div>\s*<\/div>/i);
+    if (audioSectionMatch) {
+      for (const match of audioSectionMatch[1].matchAll(/<p class="text-foreground text-xs">([^<]+)<\/p>/g)) {
+        audioLanguages.push(match[1].trim());
+      }
+    }
+
+    const subtitles = [];
+    const subSectionMatch = html.match(/Subtítulos<\/span>([\s\S]*?)<\/div>\s*<\/div>/i);
+    if (subSectionMatch) {
+      for (const match of subSectionMatch[1].matchAll(/title="Subtítulos disponibles:\s*([^"]+)"/g)) {
+        subtitles.push(match[1].trim());
+      }
+    }
+
+    async function probarSeason(id, seasonNum) {
+      const BODY = [{
+        season_number: parseInt(seasonNum),
+        page: 1,
+        limit: 99999,
+        sort: "NUMBER_ASC",
+        excludedLabelSlugs: "$undefined",
+        brandHost: "doramasmp4.io",
+        serie_id: serieIdEncontrado
+      }];
+
+      for (let intento = 1; intento <= MAX_REINTENTOS; intento++) {
+        try {
+          const res = await fetch(URLd, {
+            method: "POST",
+            headers: {
+              "User-Agent": "Mozilla/5.0",
+              "content-type": "text/x-component",
+              "next-action": id,
+              "accept": "text/x-component",
+              "Referer": URLd,
+              "Origin": BASE
+            },
+            body: JSON.stringify(BODY)
+          });
+
+          const txt = await res.text();
+          const esValido = txt.includes("PaginationEpisodeResponse") && txt.includes(serieIdEncontrado);
+          const invalido = !esValido || txt.includes('1:"$undefined"') || txt.includes('1:[]') || txt.includes('1:{"ok":false');
+
+          if (!invalido) {
+            return { id, seasonNum, txt };
+          }
+        } catch (e) { }
+      }
+      return null;
+    }
+
+    const actionIdValido = await Promise.any(
+      IDS.map(async (id) => {
+        const res = await probarSeason(id, temporadasEncontradas[0]);
+        if (res) return res.id;
+        throw new Error();
+      })
+    ).catch(() => null);
+
+    if (!actionIdValido) return null;
+
+    // Procesamos secuencialmente o mantenemos el orden para acumular el conteo global
+    const resultados = [];
+    for (const season of temporadasEncontradas) {
+      const r = await probarSeason(actionIdValido, season);
+      if (r) resultados.push(r);
+    }
+
+    let contadorGlobal = 0;
+    const formattedEpisodes = [];
+
+    resultados.forEach((res) => {
+      if (!res || !res.txt) return;
+
+      try {
+        const lines = res.txt.split("\n");
+        for (const line of lines) {
+          if (line.includes("PaginationEpisodeResponse") || line.includes("items")) {
+            const colonIndex = line.indexOf(":");
+            if (colonIndex !== -1) {
+              const jsonStr = line.slice(colonIndex + 1).trim();
+              const parsedData = JSON.parse(jsonStr);
+
+              if (parsedData && Array.isArray(parsedData.items)) {
+                parsedData.items.forEach(ep => {
+                  contadorGlobal++;
+                  formattedEpisodes.push({
+                    num: contadorGlobal,
+                    url: `${BASE}/capitulos/${ep.slug || ''}`,
+                    img: ep.backdrop || ep.image || ep.poster || ''
+                  });
+                });
+              }
+            }
+          }
+        }
+      } catch (e) { }
+    });
+
+    return {
+      source: 'dormp4',
+      title: title,
+      slug: URLd.split("/").filter(Boolean).pop() || "",
+      isEnd: isEnd,
+      episodes_count: episodes_count || formattedEpisodes.length,
+      isNewEP: '',
+      tags: [...new Set(tags)],
+      langs: audioLanguages,
+      sub: subtitles,
+      episodes: formattedEpisodes
+    };
+  }
+
+
   return {
     extractAnimeFLV,
     extractTio,
@@ -750,259 +1234,10 @@ const ScraperModule = (() => {
     extractTmonet,
     extractesp,
     extractoly,
-    extractTmo
+    extractTmo,
+    extractdorlat,
+    extractdormp4
   };
-})();
-
-// ============================================================================
-// MÓDULO: STREAMING / PROXY
-// ============================================================================
-const StreamModule = (() => {
-
-  function getRefererForHost(host) {
-    if (!host) return 'https://www.mp4upload.com/';
-    if (host.includes('burstcloud')) return 'https://burstcloud.co/';
-    if (host.includes('vidcache')) return 'https://www.yourupload.com/';
-    if (host.includes('mp4upload')) return 'https://www.mp4upload.com/';
-    return 'https://www.mp4upload.com/';
-  }
-
-  function validateVideoUrl(videoUrl, timeoutMs = 5000) {
-    return new Promise((resolve) => {
-      let redirects = 0;
-      const maxRedirects = 5;
-      let resolved = false;
-      const logs = [];
-
-      const pushLog = (type, data) => logs.push({ time: new Date().toISOString(), type, data });
-      const finish = (data) => { if (resolved) return; resolved = true; resolve({ ...data, log: logs }); };
-
-      const doRequest = (currentUrl, method = 'HEAD') => {
-        pushLog('request', { url: currentUrl, method });
-        const u = urlLib.parse(currentUrl);
-        const isHttps = u.protocol === 'https:';
-        const agent = isHttps
-          ? new https.Agent({ keepAlive: true, servername: u.hostname, rejectUnauthorized: false })
-          : undefined;
-
-        const options = {
-          method, hostname: u.hostname,
-          port: u.port || (isHttps ? 443 : 80),
-          path: (u.pathname || '/') + (u.search || ''),
-          headers: {
-            Referer: 'https://www.yourupload.com/', 'User-Agent': 'Mozilla/5.0',
-            ...(method === 'GET' ? { Range: 'bytes=0-1023' } : {})
-          },
-          agent, timeout: timeoutMs
-        };
-
-        const proto = isHttps ? https : http;
-        const req = proto.request(options, (res) => {
-          pushLog('response', { statusCode: res.statusCode, headers: res.headers });
-
-          if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
-            if (++redirects > maxRedirects) return finish({ ok: false, reason: 'too_many_redirects' });
-            const nextUrl = urlLib.resolve(currentUrl, res.headers.location);
-            return doRequest(nextUrl, method);
-          }
-
-          const contentType = res.headers['content-type'] || '';
-          const contentLength = Number(res.headers['content-length'] || 0);
-          const isVideo = contentType.startsWith('video/') || contentType.includes('octet-stream');
-
-          let reason;
-          if (![200, 206].includes(res.statusCode)) reason = 'bad_status_code';
-          else if (!isVideo) reason = 'not_video_mime';
-          else if (contentLength <= 0) reason = 'empty_or_unknown_size';
-          else reason = 'ok';
-
-          finish({ ok: reason === 'ok', statusCode: res.statusCode, contentType, contentLength, finalUrl: currentUrl, reason });
-        });
-
-        req.on('error', (err) => {
-          pushLog('error', { method, message: err.message, code: err.code });
-          if (method === 'HEAD') return doRequest(currentUrl, 'GET');
-          finish({ ok: false, reason: 'request_error' });
-        });
-
-        req.on('timeout', () => {
-          req.destroy();
-          finish({ ok: false, reason: 'timeout' });
-        });
-
-        req.end();
-      };
-
-      doRequest(videoUrl);
-    });
-  }
-
-  async function proxyImage(url, res) {
-    const controller = new AbortController();
-    try {
-      const r = await HttpModule.axiosInstance.get(url, { responseType: 'stream', signal: controller.signal });
-      res.setHeader('Content-Type', r.headers['content-type'] || 'image/jpeg');
-      const stream = r.data;
-      const cleanup = () => { controller.abort(); stream.destroy(); };
-      res.on('close', cleanup);
-      res.on('error', cleanup);
-      stream.on('error', cleanup);
-      stream.pipe(res);
-    } catch {
-      res.headersSent ? res.end() : res.status(500).end();
-    }
-  }
-
-  function streamVideo(videoUrl, req, res) {
-    if (!videoUrl) return res.status(400).send('Falta parámetro videoUrl');
-
-    // CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
-
-    const parsedUrl = urlLib.parse(videoUrl);
-    const isHttps = parsedUrl.protocol === 'https:';
-    const protocol = isHttps ? https : http;
-    const referer = getRefererForHost(parsedUrl.hostname);
-
-    // Offset inicial desde el header Range del cliente
-    let byteOffset = 0;
-    const rangeHeader = req.headers.range;
-    if (rangeHeader) {
-      const m = rangeHeader.match(/bytes=(\d+)-/);
-      if (m) byteOffset = parseInt(m[1], 10);
-    }
-
-    // ---- Ciclo de vida ----
-    let done = false;
-    let retries = 0;
-    const MAX_RETRIES = 3;
-    const RETRY_BASE_MS = 800;
-
-    // Termina definitivamente. Solo se ejecuta una vez.
-    function terminate(code, msg) {
-      if (done) return;
-      done = true;
-      if (!res.headersSent) {
-        res.status(code).end(msg ?? undefined);
-      } else if (!res.writableEnded) {
-        res.end();
-      }
-    }
-
-    // Si el cliente cierra la pestaña, paramos sin reintentar
-    req.once('close', () => { done = true; });
-
-    // ---- Conexión al origen ----
-    function connect(fromByte) {
-      if (done) return;
-
-      const reqHeaders = {
-        'Referer': referer,
-        'Origin': referer,
-        'User-Agent': 'Mozilla/5.0',
-      };
-      if (fromByte > 0) reqHeaders['Range'] = `bytes=${fromByte}-`;
-
-      const options = {
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port || (isHttps ? 443 : 80),
-        path: (parsedUrl.pathname || '/') + (parsedUrl.search || ''),
-        method: 'GET',
-        headers: reqHeaders,
-        rejectUnauthorized: false,
-      };
-
-      const originReq = protocol.request(options, (originRes) => {
-        // Si el cliente ya cerró, drenar y salir
-        if (done) { originRes.resume(); return; }
-
-        retries = 0; // respuesta exitosa → resetear
-
-        // El servidor rechazó la petición
-        if (originRes.statusCode >= 400) {
-          originRes.resume();
-          return terminate(originRes.statusCode, 'Video no disponible');
-        }
-
-        // Enviar cabeceras al cliente (solo la primera vez)
-        if (!res.headersSent) {
-          const outHeaders = {
-            'Content-Type': 'video/mp4',
-            'Accept-Ranges': 'bytes',
-            'Content-Disposition': 'inline',
-          };
-          if (originRes.headers['content-length'])
-            outHeaders['Content-Length'] = originRes.headers['content-length'];
-          if (originRes.headers['content-range'])
-            outHeaders['Content-Range'] = originRes.headers['content-range'];
-
-          res.writeHead(originRes.statusCode === 206 ? 206 : 200, outHeaders);
-        }
-
-        // ---- Escritura manual (sin .pipe) ----
-        // .pipe() registra listeners permanentes en `res` que se acumulan
-        // con cada reconexión. Escribimos chunk a chunk y manejamos
-        // back-pressure manualmente.
-        originRes.on('data', (chunk) => {
-          if (done) { originRes.destroy(); return; }
-
-          byteOffset += chunk.length;
-
-          const ok = res.write(chunk);
-          if (!ok) {
-            // El buffer de salida está lleno: pausar el origen
-            originRes.pause();
-            res.once('drain', () => {
-              if (!done) originRes.resume();
-            });
-          }
-        });
-
-        originRes.once('end', () => {
-          terminate(200, null);
-        });
-
-        originRes.once('error', (err) => {
-          if (done) return;
-          // 'aborted' puede ser: (a) cliente cerró, (b) servidor cortó
-          // Solo reintentamos si el cliente sigue conectado
-          retry(byteOffset, `originRes: ${err.message}`);
-        });
-      });
-
-      originReq.setTimeout(25000, () => {
-        originReq.destroy(new Error('timeout'));
-      });
-
-      originReq.once('error', (err) => {
-        if (done) return;
-        retry(byteOffset, `originReq: ${err.message}`);
-      });
-
-      originReq.end();
-    }
-
-    function retry(fromByte, reason) {
-      if (done) return;
-
-      retries++;
-      if (retries > MAX_RETRIES) {
-        console.error(`[streamVideo] sin más reintentos — ${reason}`);
-        return terminate(502, 'Error al conectar con el origen del video');
-      }
-
-      const delay = RETRY_BASE_MS * retries;
-      console.warn(`[streamVideo] reintento ${retries}/${MAX_RETRIES} en ${delay}ms — ${reason}`);
-      setTimeout(() => connect(fromByte), delay);
-    }
-
-    connect(byteOffset);
-  }
-
-  return { validateVideoUrl, proxyImage, streamVideo };
 })();
 
 // ============================================================================
@@ -1014,7 +1249,15 @@ async function getEpisodes(url) {
   }
 
   try {
-    const { data } = await HttpModule.axiosInstance.get(url);
+    const { data } = await HttpModule.axiosInstance.get(url, {
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache'
+      }
+    });
     const host = new URL(url).hostname;
 
     // 🔥 Regex exactos (sin colisiones)
@@ -1061,6 +1304,14 @@ async function getEpisodes(url) {
 
     if (/zonatmo\.org$/.test(host)) {
       return ScraperModule.extractTmo(data, url);
+    };
+
+    if (/doramaslat\./.test(host)) {
+      return ScraperModule.extractdorlat(data);
+    };
+
+    if (/doramasmp4\./.test(host)) {
+      return ScraperModule.extractdormp4(url)
     };
 
     return {
@@ -1149,6 +1400,14 @@ async function getDescription(url) {
 
     if (/mangalect\.org$/.test(host)) {
       return $("#synopsis-text").text().trim();
+    }
+    if (/doramaslat\./.test(host)) {
+      return $('div.entry p, .wp-content p, .description p, .entry-content p').first().text().trim() ||
+        $('.sheader .data .row p').first().text().trim();
+    }
+
+    if (/doramasmp4\./.test(host)) {
+      return $('p.text-sm.leading-\\[20px\\]').text().trim();
     }
 
     if (/olympusxyz\./.test(host)) {

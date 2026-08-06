@@ -1,0 +1,100 @@
+{
+    "38": {
+        "name": "Latino",
+        "alias": [
+            "latino",
+            "lat",
+            "006"
+        ]
+    },
+    "37": {
+        "name": "Castellano",
+        "alias": [
+            "castellano",
+            "esp",
+            "es"
+        ]
+    },
+    "192": {
+        "name": "Subtitulado",
+        "alias": [
+            "sub",
+            "subtitulado"
+        ]
+    },
+    "13109": {
+        "name": "Coreano",
+        "alias": [
+            "ko",
+            "korean",
+            "coreano",
+            "Coreano",
+            "009"
+        ]
+    },
+    "13110": {
+        "name": "Japones",
+        "alias": [
+            "jp",
+            "japanese",
+            "japones",
+            "001"
+        ]
+    },
+    "13111": {
+        "name": "Mandarín",
+        "alias": [
+            "zh",
+            "mandarin",
+            "mandarin",
+            "cn"
+        ]
+    },
+    "13112": {
+        "name": "Tailandes",
+        "alias": [
+            "th",
+            "thai",
+            "tailandes"
+        ]
+    },
+    "13113": {
+        "name": "Filipino",
+        "alias": [
+            "fil",
+            "filipino"
+        ]
+    },
+    "13114": {
+        "name": "Indones",
+        "alias": [
+            "id",
+            "indonesian",
+            "indones"
+        ]
+    },
+    "36": {
+        "name": "Inglés",
+        "alias": [
+            "en",
+            "english",
+            "ingles"
+        ]
+    },
+    "343422": {
+        "name": "Vietnamita",
+        "alias": [
+            "vi",
+            "vietnamese",
+            "vietnamita"
+        ]
+    },
+    "1327": {
+        "name": "Portugués",
+        "alias": [
+            "pt",
+            "portuguese",
+            "portugues"
+        ]
+    }
+}

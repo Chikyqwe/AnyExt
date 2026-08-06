@@ -53,11 +53,28 @@ function best(master, base) {
 
 module.exports = async function uq(pageUrl) {
     try {
-        const { data: html } = await axiosGet(pageUrl, {
+        const axios = require('axios');
+        const origin = new URL(pageUrl).origin;
+
+        // Cloudflare responde 403 pero incluye el HTML completo en el body.
+        // validateStatus: () => true evita que axios lance excepción y permite leer el body.
+        const { data: html } = await axios.get(pageUrl, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Referer': origin + '/',
+                'Origin': origin,
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'same-origin',
             },
-            timeout: 10000
+            timeout: 15000,
+            validateStatus: () => true,   // ← ignora 403, lee el body igual
+            maxRedirects: 5,
         });
 
         const scriptMatch = html.match(

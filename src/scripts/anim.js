@@ -5,6 +5,7 @@ const path = require("path");
 const PQueue = require("p-queue").default;
 const { last } = require("./lastep");
 const { mainm } = require('./manga/core');
+const { mainn } = require('./dramas/core')
 
 // --------------------------------------------
 // Configuración
@@ -428,6 +429,7 @@ const main = async ({ log = console.log } = {}) => {
   }
   await last();
   await mainm();
+  await mainn();
   log("[SUCCESS] Todo completado");
 
   // 🔥 Limpiar globales

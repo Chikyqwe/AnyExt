@@ -41,13 +41,17 @@ const aniyae = require('./models/basic_models/ay'); // open.aniyae
 const one = require('./models/basic_models/one');       // animeflv.one
 const jk = require('./models/basic_models/jk');         // jkanime
 const generic = require('./models/basic_models/generic'); // genérico
+const dorlat = require('./models/basic_models/dorlat');   // doramaslat.com
+const dormp4 = require('./models/basic_models/dormp4');   // doramasmp4.io
 
 // Mapa de portales usando Expresiones Regulares para emparejar la URL
 const portalExtractors = [
   { regex: /hentaila\.com/i, module: hl },
   { regex: /open\.aniyae\.net/i, module: aniyae },
   { regex: /animeflv\.one/i, module: one },
-  { regex: /jkanime\.net/i, module: jk }
+  { regex: /jkanime\.net/i, module: jk },
+  { regex: /doramaslat\.com/i, module: dorlat },
+  { regex: /doramasmp4\.io/i, module: dormp4 }
 ];
 
 // Helper para normalizar la función de extracción del portal
@@ -58,14 +62,17 @@ function getPortalExtractorFn(mod) {
   if (typeof mod?.extractAniyae === 'function') return mod.extractAniyae;
   if (typeof mod?.extractONE === 'function') return mod.extractONE;
   if (typeof mod?.extractJK === 'function') return mod.extractJK;
+  if (typeof mod?.extractDorLat === 'function') return mod.extractDorLat;
+  if (typeof mod?.getdormp4 === 'function') return mod.getdormp4;
   return null;
 }
 
 // ------------------------------
 // MAIN
 // ------------------------------
-async function extractAllVideoLinks(pageUrl) {
-  const pageKey = crypto.createHash('md5').update(pageUrl).digest('hex');
+async function extractAllVideoLinks(pageUrl, langFilter = null) {
+  const cacheKeySuffix = langFilter ? `:lang=${langFilter}` : '';
+  const pageKey = crypto.createHash('md5').update(pageUrl + cacheKeySuffix).digest('hex');
 
   // Cache
   if (linksCache.exists(pageKey)) {
@@ -88,13 +95,11 @@ async function extractAllVideoLinks(pageUrl) {
   const $ = cheerio.load(html);
   let videos = [];
 
-  // --- NUEVA LÓGICA DINÁMICA BASADA EN REQUIRES ---
-  // Buscamos si la URL coincide con alguno de nuestros extractores registrados
   const match = portalExtractors.find(p => p.regex.test(pageUrl));
   let extractFn = match ? getPortalExtractorFn(match.module) : null;
 
   if (extractFn) {
-    videos = await extractFn($, pageUrl);
+    videos = await extractFn($, pageUrl, langFilter);
   } else {
     // Si no coincide con ninguno, usamos el genérico (también requerido desde módulo)
     const genericFn = getPortalExtractorFn(generic);
@@ -119,6 +124,7 @@ const st = require('./models/st');
 const uq = require('./models/uq');
 const mp4 = require('./models/mp4');
 const jkum = require('./models/jkum');
+const ok = require('./models/ok')
 const esp = require("./models/manga_models/esp")
 const oly = require("./models/manga_models/oly")
 const tmo = require("./models/manga_models/tmo")
@@ -134,6 +140,7 @@ function normalizeExtractor(mod) {
   if (typeof mod?.uq === 'function') return mod.uq;
   if (typeof mod?.mp4 === 'function') return mod.mp4;
   if (typeof mod?.jkum === 'function') return mod.jkum;
+  if (typeof mod?.ok === 'function') return mod.ok;
   if (typeof mod?.getesp === 'function') return mod.getesp;
   if (typeof mod?.getoly === 'function') return mod.getoly;
   if (typeof mod?.getTmo === 'function') return mod.getTmo;
@@ -155,6 +162,8 @@ const extractorMap = {
   stape: st,
   uqload: uq,
   mp4upload: mp4,
+  okru: ok,
+  ok: ok,
   jkum: jkum,
   esp: esp,
   oly: oly,

@@ -14,9 +14,10 @@ const apiQueue = require('../core/queue/queueService');
 const { supabase } = require('../services/supabase/supabase');
 const { HTTPS } = require('../config');
 
-const { readAnimeList, readMangaList, getAnimeByUnitId, getMangaByUnitId, getJSONPath, buildEpisodeUrl } = require('../services/jsonService');
+const { readAnimeList, readMangaList, getAnimeByUnitId, getMangaByUnitId, getDramaByUnitId, buildEpisodeUrl, readDramaList } = require('../services/jsonService');
 const animeController = require('./animeController');
 const mangaController = require('./mangaController');
+const dramaController = require('./dramaController');
 const Fuse = require('fuse.js');
 
 const { extractAllVideoLinks, getExtractor } = require('../core/core');
@@ -44,8 +45,9 @@ let fuse = null;
 function buildSearchIndex() {
   const animes = readAnimeList().map(a => ({ ...a, contentType: 'anime' }));
   const mangas = readMangaList().map(m => ({ ...m, contentType: 'manga' }));
+  const dramas = readDramaList().map(d => ({ ...d, contentType: 'drama' }));
 
-  const all = [...animes, ...mangas];
+  const all = [...animes, ...mangas, ...dramas];
 
   searchable = all.map(item => ({
     ...item,
@@ -84,6 +86,7 @@ function norm(name) {
   if (['yourupload', 'your-up', 'yu'].some(s => n.includes(s))) return 'yu';
   if (['burstcloud', 'bc'].some(s => n.includes(s))) return 'bc';
   if (['asnwish', 'obeywish', 'sw'].some(s => n.includes(s))) return 'sw';
+  if (['mega', 'nz', 'mega.nz'].some(s => n.includes(s))) return 'mega';
   return n;
 }
 
@@ -109,7 +112,10 @@ async function filterV(videos) {
   const out = [];
   for (const v of videos) {
     const s = norm(v.servidor);
-    if (!getExtractor(s)) continue;
+
+    // Permitir pasar si hay extractor disponible O si el servidor es Mega
+    if (!getExtractor(s) && s !== 'mega') continue;
+
     const it = { servidor: s, label: v.label, name: v.name, url: v.url };
 
     if (typeof it.url === 'string' && it.url.includes('mega.nz')) {
@@ -118,7 +124,9 @@ async function filterV(videos) {
         const r = await verificarArchivoMega(id, key);
         if (r?.disponible) it.url = `https://mega.nz/embed/${id}#${key}`;
         else continue;
-      } catch { }
+      } catch {
+        continue;
+      }
     }
     out.push(it);
   }
@@ -157,7 +165,7 @@ const createVideoCleaner = () => {
 };
 
 // ─────────────────────────────────────────────
-// CONTENT ROUTES (from contentController)
+// CONTENT ROUTES
 // ─────────────────────────────────────────────
 
 exports.list = asyncHandler(async (req, res) => {
@@ -165,34 +173,28 @@ exports.list = asyncHandler(async (req, res) => {
 
   const animesRaw = readAnimeList();
   const mangasRaw = readMangaList();
+  const dramasRaw = readDramaList();
 
   if (p === 'all') {
     const all = [
       ...animesRaw.map(a => ({ ...a, contentType: 'anime' })),
-      ...mangasRaw.map(m => ({ ...m, contentType: 'manga' }))
+      ...mangasRaw.map(m => ({ ...m, contentType: 'manga' })),
+      ...dramasRaw.map(d => ({ ...d, contentType: 'drama' }))
     ];
     return res.json({ items: all });
   }
 
   const page = Math.max(1, parseInt(p) || 1);
-  const total = animesRaw.length + mangasRaw.length;
+  const total = animesRaw.length + mangasRaw.length + dramasRaw.length;
   const start = (page - 1) * PER_PAGE;
-  const end = start + PER_PAGE;
 
-  let slicedItems = [];
-  if (start < animesRaw.length) {
-    if (end <= animesRaw.length) {
-      slicedItems = animesRaw.slice(start, end).map(a => ({ ...a, contentType: 'anime' }));
-    } else {
-      slicedItems = [
-        ...animesRaw.slice(start).map(a => ({ ...a, contentType: 'anime' })),
-        ...mangasRaw.slice(0, end - animesRaw.length).map(m => ({ ...m, contentType: 'manga' }))
-      ];
-    }
-  } else {
-    const mangaStart = start - animesRaw.length;
-    slicedItems = mangasRaw.slice(mangaStart, mangaStart + PER_PAGE).map(m => ({ ...m, contentType: 'manga' }));
-  }
+  const allItems = [
+    ...animesRaw.map(a => ({ ...a, contentType: 'anime' })),
+    ...mangasRaw.map(m => ({ ...m, contentType: 'manga' })),
+    ...dramasRaw.map(d => ({ ...d, contentType: 'drama' }))
+  ];
+
+  const slicedItems = allItems.slice(start, start + PER_PAGE);
 
   const items = slicedItems.map(item => ({
     title: item.title,
@@ -203,12 +205,14 @@ exports.list = asyncHandler(async (req, res) => {
   }));
 
   const mangaStartPage = Math.floor(animesRaw.length / PER_PAGE) + 1;
+  const dramaStartPage = Math.floor((animesRaw.length + mangasRaw.length) / PER_PAGE) + 1;
 
   res.json({
     page,
     total,
     totalpages: Math.ceil(total / PER_PAGE),
     manga_start_page: mangaStartPage,
+    drama_start_page: dramaStartPage,
     items,
   });
 });
@@ -223,10 +227,33 @@ exports.info = asyncHandler(async (req, res, next) => {
   const manga = getMangaByUnitId(uid);
   if (!manga.error) return mangaController.info(req, res, next);
 
+  const drama = getDramaByUnitId(uid);
+  if (!drama.error) return dramaController.info(req, res, next);
+
   return res.status(404).json({
     error: `No se encontró contenido con uid ${uid}`,
     recommendedAnimeId: anime.recommendedId,
-    recommendedMangaId: manga.recommendedId
+    recommendedMangaId: manga.recommendedId,
+    recommendedDramaId: drama.recommendedId
+  });
+});
+// ─────────────────────────────────────────────
+// BASIC INFO
+// ─────────────────────────────────────────────
+
+exports.basicInfo = asyncHandler(async (req, res) => {
+  const uid = parseInt(req.query.uid);
+  const anime = getAnimeByUnitId(uid);
+
+  if (!anime) {
+    return res.status(404).json({ error: `No se encontró anime con uid=${uid}` });
+  }
+
+  res.json({
+    type: 'anime',
+    title: anime.title,
+    slug: anime.slug,
+    uid,
   });
 });
 
@@ -237,11 +264,20 @@ exports.img = asyncHandler(async (req, res) => {
 
   let item = getAnimeByUnitId(parseInt(uid));
   let isAnime = true;
+  let isManga = false;
 
   if (item.error) {
     item = getMangaByUnitId(parseInt(uid));
     isAnime = false;
+    isManga = true;
   }
+
+  if (item.error) {
+    item = getDramaByUnitId(parseInt(uid));
+    isAnime = false;
+    isManga = false;
+  }
+
 
   if (item.error) {
     return res.status(404).json({ error: `Contenido uid=${uid} no encontrado` });
@@ -343,18 +379,21 @@ exports.rebuildSearch = asyncHandler(async (req, res) => {
 exports.rebuildSearchLocal = buildSearchIndex;
 
 // ─────────────────────────────────────────────
-// VIDEO ROUTES (from videoController)
+// VIDEO ROUTES
 // ─────────────────────────────────────────────
 
 exports.play = asyncHandler(async (req, res) => {
   try {
-    let { type = 'anime', Did, uid, ep, s = 'auto', m, refresh, Os = false } = req.body;
+    let { type = 'anime', Did, uid, ep, s = 'auto', m, refresh, Os = false, lang = null } = req.body;
     uid = uid ? parseInt(uid) : undefined;
     ep = ep ? parseInt(ep) : undefined;
 
     if (!uid) return res.status(400).json({ error: true, message: 'uid obligatorio' });
     if (!ep) return res.status(400).json({ error: true, message: 'ep obligatorio' });
 
+    // ─────────────────────────────────────────────
+    // 📖 MANGA
+    // ─────────────────────────────────────────────
     if (type === 'manga') {
       const { getEpisodes } = require('../utils/helpers');
 
@@ -422,27 +461,52 @@ exports.play = asyncHandler(async (req, res) => {
       });
     }
 
-    const anime = getAnimeByUnitId(uid);
-    if (!anime?.unit_id) return res.status(404).json({ error: true, message: 'Anime no encontrado' });
+    // ─────────────────────────────────────────────
+    // 📺 ANIME Y DRAMA (VIDEO)
+    // ─────────────────────────────────────────────
+    const { getEpisodes } = require('../utils/helpers');
+
+    let contentItem = null;
+
+    if (type === 'drama' || type === 'dorama') {
+      contentItem = getDramaByUnitId(uid);
+      if (!contentItem?.unit_id) return res.status(404).json({ error: true, message: 'Drama no encontrado' });
+    } else {
+      contentItem = getAnimeByUnitId(uid);
+      if (!contentItem?.unit_id) return res.status(404).json({ error: true, message: 'Anime no encontrado' });
+    }
 
     const isAutoMirror = m === 'auto' || !m || m === '';
-    const mirrorsToTry = isAutoMirror ? [1, 2, 3] : [parseInt(m) || 1];
+    const mirrorsToTry = isAutoMirror
+      ? Object.keys(contentItem.sources || {}).filter(k => contentItem.sources[k])
+      : [m];
+
+    if (mirrorsToTry.length === 0) return res.status(404).json({ error: true, message: 'No hay mirrors disponibles' });
 
     let valid = [];
-    let finalMirror = 1;
+    let finalMirror = null;
     const force = refresh === true || refresh === 'true';
 
-    for (const currentMirror of mirrorsToTry) {
-      const episodeUrl = await buildEpisodeUrl(anime, ep, currentMirror);
-      if (!episodeUrl) continue;
+    for (const mirrorKey of mirrorsToTry) {
+      const sourceUrl = contentItem.sources?.[mirrorKey];
+      if (!sourceUrl) continue;
 
-      const vids = await extractAllVideoLinks(episodeUrl);
+      let raw;
+      try { raw = await getEpisodes(sourceUrl); } catch (e) { continue; }
+
+      if (raw && !raw.episodes && raw.chapters) raw.episodes = raw.chapters;
+      if (!raw?.episodes) continue;
+
+      const episode = raw.episodes.find(e => Number(e.num || e.number) === ep);
+      if (!episode?.url) continue;
+
+      const vids = await extractAllVideoLinks(episode.url, lang);
       if (!vids || vids.status >= 700) continue;
 
       const filtered = await filterV(vids);
       if (filtered && filtered.length > 0) {
         valid = filtered;
-        finalMirror = currentMirror;
+        finalMirror = mirrorKey;
         break;
       }
     }
@@ -455,15 +519,38 @@ exports.play = asyncHandler(async (req, res) => {
     const now = Math.floor(Date.now() / 1000);
 
     if (!Os) {
+      // 1. Servidores HLS / Stream
       if (['sw', 'voe', 'streamwish', 'uqload'].includes(sel.servidor)) {
         const { mid, Rc } = await getVid(sel.servidor, sel.url, null, force);
         return res.json({
           type, mirror: finalMirror, servers: serverNames, Sserver: sel.servidor,
-          url: `/api/getMedia/${mid}`, mid, lang: 'sub', mtype: 'hls', timestamp: now, exp: now + 15 * 60,
+          url: `/api/getMedia/${mid}`, mid, lang: sel.lang || lang || 'sub', mtype: 'hls', timestamp: now, exp: now + 15 * 60,
         });
       }
 
+      // 2. Servidor MEGA
+      if (sel.servidor === 'mega') {
+        const mid = generateKey(sel.url);
+        cache.save(mid, sel.url);
+
+        return res.json({
+          type,
+          mirror: finalMirror,
+          servers: serverNames,
+          Sserver: sel.servidor,
+          url: `/api/getMedia/${mid}`,
+          mid,
+          lang: sel.lang || lang || 'sub',
+          mtype: 'embed',
+          timestamp: now,
+          exp: now + 15 * 60,
+        });
+      }
+
+      // 3. Servidores con extractor directo
       const ex = getExtractor(sel.servidor);
+      if (!ex) return res.status(404).json({ error: true, message: `Extractor no encontrado para ${sel.servidor}` });
+
       const r = await ex(sel.url);
       if (!r || r.status >= 700) return res.status(404).json({ error: true, message: r?.mjs || 'Error extractor' });
 
@@ -472,7 +559,7 @@ exports.play = asyncHandler(async (req, res) => {
         cache.save(mid, r.url);
         return res.json({
           type, mirror: finalMirror, servers: serverNames, Sserver: sel.servidor,
-          url: `/api/getMedia/${mid}`, mid, lang: 'sub', mtype: 'mp4', timestamp: now, exp: now + 15 * 60,
+          url: `/api/getMedia/${mid}`, mid, lang: sel.lang || lang || 'sub', mtype: 'mp4', timestamp: now, exp: now + 15 * 60,
         });
       }
     } else {
@@ -493,6 +580,11 @@ exports.getMedia = asyncHandler(async (req, res) => {
   const content = cache.load(mid);
 
   if (typeof content === 'string' && content.startsWith('http') && !content.includes('\n')) {
+    // Si es la URL embed de Mega, retornarla en JSON directamente
+    if (content.includes('mega.nz/embed/')) {
+      return res.json({ url: content });
+    }
+
     const base = `${HTTPS ? 'https' : 'http'}://${req.get('host')}`;
     return res.json({ url: `${base}/api/stream?gid=${mid}` });
   }

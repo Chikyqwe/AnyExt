@@ -71,7 +71,7 @@ app.use((req, res, next) => {
         if (fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
             return res.status(STATIC_SERVER_URL ? 503 : 200).sendFile(localPath);
         }
-    } catch (e) {}
+    } catch (e) { }
     next();
 });
 
@@ -104,27 +104,27 @@ function loadRoutes(directory) {
 
             // Si el archivo no menciona "express" o "Router" y no tiene la etiqueta de WS, 
             // probablemente no es una ruta y lo saltamos para evitar errores.
-            if (!fileContent.includes('express') && !hasWsSupport) {
+            if (!fileContent.includes('express') || !fileContent.includes('require(') && !hasWsSupport) {
                 return;
             }
 
+            console.log('[R]: ' + fullPath);
             const routeModule = require(fullPath);
-            console.log('[R]: ' + fullPath)
             let router = null;
 
             // 4. Lógica de carga según el tipo
             if (hasWsSupport && typeof routeModule === 'function') {
-                // Caso WS: Ejecutamos pasando la app
                 router = routeModule(app);
                 console.log(`[WS-ROUTE] Detectado y cargado: ${file}`);
             } else if (typeof routeModule === 'function' && routeModule.length === 1) {
-                // Caso: Exporta función de un solo argumento (asumimos que es app)
                 router = routeModule(app);
                 console.log(`[FUNC-ROUTE] Cargado mediante inyección: ${file}`);
             } else if (routeModule && (Object.getPrototypeOf(routeModule) === express.Router || routeModule.stack)) {
-                // Caso: Es un Router estándar exportado directamente
                 router = routeModule;
                 console.log(`[ROUTE] Cargado estándar: ${file}`);
+            } else {
+                // Si entró aquí es porque cumple con el filtro de texto pero no exporta un router válido
+                throw new Error(`El archivo no exporta un Router de Express válido o una función inyectable.`);
             }
 
             // 5. Montaje final
@@ -133,13 +133,14 @@ function loadRoutes(directory) {
             }
 
         } catch (err) {
-            // Si falla un archivo que no era una ruta, lo ignoramos silenciosamente
-            // Si parece una ruta pero tiene error de sintaxis, lo avisamos
-            if (err.message.includes('not a function') || err.message.includes('callback')) {
-                console.error(`[DEBUG] Salto en ${file}: ${err.message}`);
-            } else {
-                console.error(`[DEBUG] Salto en ${file}: ${err.message}`);
-            }
+            // 🔥 AQUÍ IMPRIMIMOS LA RUTA EXACTA DEL ARCHIVO Y EL ERROR DETALLADO
+            console.error(`\n========================================`);
+            console.error(`[ERROR CRÍTICO] Falló al cargar la ruta:`);
+            console.error(`[-] Archivo: ${fullPath}`);
+            console.error(`[+] Mensaje: ${err.message}`);
+            console.error(`----------------------------------------`);
+            console.error(err.stack); // Muestra la pila de llamadas exacta (línea de código)
+            console.error(`========================================\n`);
         }
     });
 }
