@@ -7,7 +7,7 @@ const ANIME_FILE = path.join(JSON_FOLDER, 'anime_list.json');
 const MANGA_FILE = path.join(JSON_FOLDER, 'manga', 'mangalist.json');
 const DRAMA_FILE = path.join(JSON_FOLDER, 'drama', 'dramalist.json');
 const CACHE = true;
-const HTTPS = true;
+const HTTPS = false;
 
 module.exports = {
   PORT,

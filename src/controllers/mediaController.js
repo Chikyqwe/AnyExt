@@ -487,6 +487,7 @@ exports.play = asyncHandler(async (req, res) => {
     let finalMirror = null;
     const force = refresh === true || refresh === 'true';
 
+    // Obtener episodios y servidores válidos
     for (const mirrorKey of mirrorsToTry) {
       const sourceUrl = contentItem.sources?.[mirrorKey];
       if (!sourceUrl) continue;
@@ -518,58 +519,155 @@ exports.play = asyncHandler(async (req, res) => {
     const serverNames = valid.map(v => v.servidor);
     const now = Math.floor(Date.now() / 1000);
 
-    if (!Os) {
-      // 1. Servidores HLS / Stream
-      if (['sw', 'voe', 'streamwish', 'uqload'].includes(sel.servidor)) {
-        const { mid, Rc } = await getVid(sel.servidor, sel.url, null, force);
-        return res.json({
-          type, mirror: finalMirror, servers: serverNames, Sserver: sel.servidor,
-          url: `/api/getMedia/${mid}`, mid, lang: sel.lang || lang || 'sub', mtype: 'hls', timestamp: now, exp: now + 15 * 60,
-        });
+    // ─────────────────────────────────────────────
+    // 🔄 FUNCIÓN PARA PROCESAR CADA SERVIDOR CON REINTENTOS
+    // ─────────────────────────────────────────────
+    async function processServer(server, force, lang, type, finalMirror, serverNames, now) {
+      try {
+        // 1. Servidores HLS / Stream
+        if (['sw', 'voe', 'streamwish', 'uqload'].includes(server.servidor)) {
+          const { mid, Rc } = await getVid(server.servidor, server.url, null, force);
+          return {
+            success: true,
+            data: {
+              type,
+              mirror: finalMirror,
+              servers: serverNames,
+              Sserver: server.servidor,
+              url: `/api/getMedia/${mid}`,
+              mid,
+              lang: server.lang || lang || 'sub',
+              mtype: 'hls',
+              timestamp: now,
+              exp: now + 15 * 60,
+            }
+          };
+        }
+
+        // 2. Servidor MEGA
+        if (server.servidor === 'mega') {
+          const mid = generateKey(server.url);
+          cache.save(mid, server.url);
+          return {
+            success: true,
+            data: {
+              type,
+              mirror: finalMirror,
+              servers: serverNames,
+              Sserver: server.servidor,
+              url: `/api/getMedia/${mid}`,
+              mid,
+              lang: server.lang || lang || 'sub',
+              mtype: 'embed',
+              timestamp: now,
+              exp: now + 15 * 60,
+            }
+          };
+        }
+
+        // 3. Servidores con extractor directo
+        const ex = getExtractor(server.servidor);
+        if (!ex) {
+          return {
+            success: false,
+            error: `Extractor no encontrado para ${server.servidor}`
+          };
+        }
+
+        const r = await ex(server.url);
+        if (!r || r.status >= 700) {
+          return {
+            success: false,
+            error: r?.mjs || 'Error en el extractor'
+          };
+        }
+
+        if (r.url) {
+          const mid = generateKey(r.url);
+          cache.save(mid, r.url);
+          return {
+            success: true,
+            data: {
+              type,
+              mirror: finalMirror,
+              servers: serverNames,
+              Sserver: server.servidor,
+              url: `/api/getMedia/${mid}`,
+              mid,
+              lang: server.lang || lang || 'sub',
+              mtype: 'mp4',
+              timestamp: now,
+              exp: now + 15 * 60,
+            }
+          };
+        }
+
+        return {
+          success: false,
+          error: 'Formato de respuesta no reconocido'
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error.message
+        };
       }
-
-      // 2. Servidor MEGA
-      if (sel.servidor === 'mega') {
-        const mid = generateKey(sel.url);
-        cache.save(mid, sel.url);
-
-        return res.json({
-          type,
-          mirror: finalMirror,
-          servers: serverNames,
-          Sserver: sel.servidor,
-          url: `/api/getMedia/${mid}`,
-          mid,
-          lang: sel.lang || lang || 'sub',
-          mtype: 'embed',
-          timestamp: now,
-          exp: now + 15 * 60,
-        });
-      }
-
-      // 3. Servidores con extractor directo
-      const ex = getExtractor(sel.servidor);
-      if (!ex) return res.status(404).json({ error: true, message: `Extractor no encontrado para ${sel.servidor}` });
-
-      const r = await ex(sel.url);
-      if (!r || r.status >= 700) return res.status(404).json({ error: true, message: r?.mjs || 'Error extractor' });
-
-      if (r.url) {
-        const mid = generateKey(r.url);
-        cache.save(mid, r.url);
-        return res.json({
-          type, mirror: finalMirror, servers: serverNames, Sserver: sel.servidor,
-          url: `/api/getMedia/${mid}`, mid, lang: sel.lang || lang || 'sub', mtype: 'mp4', timestamp: now, exp: now + 15 * 60,
-        });
-      }
-    } else {
-      return res.json({ type, mirror: finalMirror, servers: serverNames });
     }
 
-    return res.status(500).json({ error: true, message: 'Formato no reconocido' });
+    // ─────────────────────────────────────────────
+    // 📤 RESPUESTA PARA OS (SOLO SERVIDORES)
+    // ─────────────────────────────────────────────
+    if (Os) {
+      return res.json({
+        type,
+        mirror: finalMirror,
+        servers: serverNames
+      });
+    }
+
+    // ─────────────────────────────────────────────
+    // 🔄 REINTENTOS CON MÚLTIPLES SERVIDORES
+    // ─────────────────────────────────────────────
+    // Ordenar servidores: primero el seleccionado, luego los demás
+    const sortedServers = [
+      sel,
+      ...valid.filter(v => v.servidor !== sel.servidor)
+    ];
+
+    let lastError = null;
+    let attempts = 0;
+
+    for (const server of sortedServers) {
+      attempts++;
+      const result = await processServer(server, force, lang, type, finalMirror, serverNames, now);
+
+      if (result.success) {
+        console.log(`[play] Éxito con servidor: ${server.servidor}`);
+        return res.json(result.data);
+      }
+
+      lastError = result.error;
+    }
+
+    // ─────────────────────────────────────────────
+    // ⚠️ TODOS LOS SERVIDORES FALLARON
+    // ─────────────────────────────────────────────
+    console.error(`[play] Todos los ${attempts} servidores fallaron. Último error: ${lastError}`);
+    return res.status(404).json({
+      error: true,
+      message: `No se pudo obtener el video de ningún servidor. Último error: ${lastError}`,
+      attempts: attempts,
+      servers_tried: sortedServers.map(s => s.servidor)
+    });
+
   } catch (e) {
-    console.error('[play]', e);
-    if (!res.headersSent) res.status(500).json({ error: true, message: e.message });
+    console.error('[play] Error general:', e);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: true,
+        message: e.message || 'Error interno del servidor'
+      });
+    }
   }
 });
 
