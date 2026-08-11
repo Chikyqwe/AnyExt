@@ -1,7 +1,8 @@
-const { TextStore, keyStore, SimpleCache, MemCache } = require('./cacheStorage');
+// src/core/cache/cache.js — Wrappers sobre cacheStorage (100% RAM)
+const { TextStore, keyStore, SimpleCache, MemCache, ramMonitor } = require('./cacheStorage');
 const { CACHE } = require("../../config");
 
-// --- CACHE DE TEXTO ---
+// --- CACHE DE TEXTO (comprimido en RAM) ---
 class TextCache {
     constructor(options = { ttlMs: 5 * 60 * 1000 }) {
         this.cache = new TextStore(options);
@@ -12,7 +13,16 @@ class TextCache {
 
     save(uuid, text) {
         if (!CACHE) return;
-        return this.cache.set(uuid, text);
+        const result = this.cache.set(uuid, text);
+        this._logRamUsage();
+        return result;
+    }
+
+    _logRamUsage() {
+        if (process.env.DEBUG_RAM === 'true') {
+            const usage = ramMonitor.getRamUsage();
+            console.log(`[TextCache] RAM usage: ${usage.totalMB} MB (${usage.details.length} cache instances)`);
+        }
     }
 
     load(uuid) {
@@ -29,9 +39,13 @@ class TextCache {
         if (!CACHE) return;
         this.cache.delete(uuid);
     }
+
+    getStats() {
+        return this.cache.getStats();
+    }
 }
 
-// --- CACHE DE LLAVES ---
+// --- CACHE DE LLAVES (objetos serializados + comprimidos en RAM) ---
 class KeyCache {
     constructor(options = { ttlMs: 15 * 60 * 1000 }) {
         this.key = new keyStore(options);
@@ -43,6 +57,14 @@ class KeyCache {
     save(keyId, keyData) {
         if (!CACHE) return;
         this.key.set(keyId, keyData);
+        this._logRamUsage();
+    }
+
+    _logRamUsage() {
+        if (process.env.DEBUG_RAM === 'true') {
+            const usage = ramMonitor.getRamUsage();
+            console.log(`[KeyCache] RAM usage: ${usage.totalMB} MB (${usage.details.length} cache instances)`);
+        }
     }
 
     load(keyId) {
@@ -59,9 +81,18 @@ class KeyCache {
         if (!CACHE) return;
         this.key.delete(keyId);
     }
+
+    clear() {
+        if (!CACHE) return;
+        this.key.clear();
+    }
+
+    getStats() {
+        return this.key.getStats();
+    }
 }
 
-// --- CACHE DISCO SIMPLE ---
+// --- CACHE GENÉRICO (comprimido en RAM, reemplaza disco) ---
 class DiskCache {
     constructor(cleanInterval = 60_000) {
         this.cache = new SimpleCache(cleanInterval);
@@ -70,6 +101,14 @@ class DiskCache {
     save(key, value, ttl) {
         if (!CACHE) return;
         this.cache.set(key, value, ttl);
+        this._logRamUsage();
+    }
+
+    _logRamUsage() {
+        if (process.env.DEBUG_RAM === 'true') {
+            const usage = ramMonitor.getRamUsage();
+            console.log(`[DiskCache] RAM usage: ${usage.totalMB} MB (${usage.details.length} cache instances)`);
+        }
     }
 
     load(key) {
@@ -86,9 +125,13 @@ class DiskCache {
         if (!CACHE) return;
         this.cache.del(key);
     }
+
+    getStats() {
+        return this.cache.getStats();
+    }
 }
 
-// --- CACHE MEMORIA ---
+// --- CACHE MEMORIA (objetos directos, sin compresión) ---
 class MemoryCache {
     constructor(options = { maxEntries: 100, maxStringLength: 50000 }) {
         this.cache = new MemCache(options);
@@ -96,7 +139,16 @@ class MemoryCache {
 
     save(key, value, ttl) {
         if (!CACHE) return;
-        return this.cache.set(key, value, ttl);
+        const result = this.cache.set(key, value, ttl);
+        this._logRamUsage();
+        return result;
+    }
+
+    _logRamUsage() {
+        if (process.env.DEBUG_RAM === 'true') {
+            const usage = ramMonitor.getRamUsage();
+            console.log(`[MemoryCache] RAM usage: ${usage.totalMB} MB (${usage.details.length} cache instances)`);
+        }
     }
 
     load(key) {
@@ -113,11 +165,25 @@ class MemoryCache {
         if (!CACHE) return;
         this.cache.delete(key);
     }
+
+    getStats() {
+        return this.cache.getStats();
+    }
 }
 
+// Función de utilidad para obtener estadísticas completas
+function getRamStats() {
+    return ramMonitor.getRamUsage();
+}
+
+// ─────────────────────────────────────────────
+// EXPORTACIONES - ¡IMPORTANTE! Exportar ramMonitor
+// ─────────────────────────────────────────────
 module.exports = {
     TextCache,
     KeyCache,
     DiskCache,
-    MemoryCache
+    MemoryCache,
+    getRamStats,
+    ramMonitor  // <-- ESTO ES CRUCIAL - Exportar ramMonitor
 };

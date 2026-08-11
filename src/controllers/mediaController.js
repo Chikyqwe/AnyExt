@@ -9,26 +9,24 @@ const { Transform } = require('stream');
 const { default: axios } = require('axios');
 
 const asyncHandler = require('../middlewares/asyncHandler');
-const { TextCache } = require('../core/cache/cache');
+const { mediaTextCache: cache, responseCache } = require('../core/cache/cacheInstances');
 const apiQueue = require('../core/queue/queueService');
 const { supabase } = require('../services/supabase/supabase');
 const { HTTPS } = require('../config');
 
-const { readAnimeList, readMangaList, getAnimeByUnitId, getMangaByUnitId, getDramaByUnitId, buildEpisodeUrl, readDramaList } = require('../services/jsonService');
-const animeController = require('./animeController');
-const mangaController = require('./mangaController');
-const dramaController = require('./dramaController');
+const { getAnimeByUnitId, getMangaByUnitId, getDramaByUnitId, getAllContentLists } = require('../services/jsonService');
 const Fuse = require('fuse.js');
+const { descriptionCache, DESCRIPTION_TTL: LRU_DESCRIPTION_TTL } = require('../core/cache/cacheInstances');
 
 const { extractAllVideoLinks, getExtractor } = require('../core/core');
 const { streamVideo, downloadVideo } = require('../utils/helpers');
 const { parseMegaUrl, verificarArchivoMega } = require('../utils/CheckMega');
+const { proxyImage, getEpisodes, getDescription } = require('../utils/helpers');
 
 const PER_PAGE = 24;
-const cache = new TextCache({ ttlMs: 15 * 60 * 1000 });
 
 // ─────────────────────────────────────────────
-// NORMALIZE & SEARCH INDEX
+// NORMALIZE & SEARCH INDEX (OPTIMIZED)
 // ─────────────────────────────────────────────
 const normalize = (str = '') =>
   str
@@ -39,36 +37,139 @@ const normalize = (str = '') =>
     .replace(/\s+/g, ' ')
     .trim();
 
+// --- Lightweight search entry (no spreading full objects) ---
+// Each entry holds: { title, normalizedTitle, unit_id, image, contentType, _ref }
 let searchable = [];
 let fuse = null;
 
+// --- Prefix index: first N chars → array of indices into searchable ---
+const PREFIX_LEN = 3;
+let prefixIndex = new Map();     // normalized prefix → [idx, idx, …]
+let substringCache = new Map();  // normalized query → results  (TTL-based)
+const SEARCH_CACHE_TTL = 5 * 60 * 1000; // 5 min
+let searchCacheTimers = new Map();
+
 function buildSearchIndex() {
-  const animes = readAnimeList().map(a => ({ ...a, contentType: 'anime' }));
-  const mangas = readMangaList().map(m => ({ ...m, contentType: 'manga' }));
-  const dramas = readDramaList().map(d => ({ ...d, contentType: 'drama' }));
+  const t0 = Date.now();
+  const all = getAllContentLists();
 
-  const all = [...animes, ...mangas, ...dramas];
+  const entries = [];
+  const types = [
+    [all.animes, 'anime'],
+    [all.mangas, 'manga'],
+    [all.dramas, 'drama']
+  ];
 
-  searchable = all.map(item => ({
-    ...item,
-    normalizedTitle: normalize(item.title),
-  }));
+  for (const [list, contentType] of types) {
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      const norm = normalize(item.title);
+      entries.push({
+        title: item.title,
+        normalizedTitle: norm,
+        unit_id: item.unit_id,
+        image: item.image || item.cover,
+        slug: item.slug,
+        contentType,
+        _ref: item  // keep reference, no spread
+      });
+    }
+  }
 
+  searchable = entries;
+
+  // Build prefix index
+  prefixIndex = new Map();
+  for (let idx = 0; idx < entries.length; idx++) {
+    const norm = entries[idx].normalizedTitle;
+    // Index all substrings of length PREFIX_LEN (trigrams)
+    for (let j = 0; j <= norm.length - PREFIX_LEN; j++) {
+      const tri = norm.substring(j, j + PREFIX_LEN);
+      let arr = prefixIndex.get(tri);
+      if (!arr) { arr = []; prefixIndex.set(tri, arr); }
+      arr.push(idx);
+    }
+  }
+
+  // Build Fuse index (lighter — only normalizedTitle)
   fuse = new Fuse(searchable, {
     includeScore: true,
-    threshold: 0.2,
+    threshold: 0.35,
     ignoreLocation: true,
+    ignoreFieldNorm: true,
     minMatchCharLength: 2,
     shouldSort: true,
-    findAllMatches: true,
-    useExtendedSearch: true,
-    keys: [
-      { name: 'normalizedTitle', weight: 1 },
-      { name: 'title', weight: 0.8 }
-    ]
+    keys: ['normalizedTitle']
   });
 
-  console.log(`[SEARCH] Indexed ${searchable.length} contents`);
+  // Clear search cache on rebuild
+  substringCache.clear();
+  for (const t of searchCacheTimers.values()) clearTimeout(t);
+  searchCacheTimers.clear();
+
+  console.log(`[SEARCH] Indexed ${searchable.length} contents in ${Date.now() - t0}ms (${prefixIndex.size} trigrams)`);
+}
+
+// --- Fast tier: trigram intersection for substring matching ---
+function fastSubstringSearch(query, limit = 20) {
+  const norm = normalize(query);
+  if (norm.length < 2) return null; // too short for fast path
+
+  // Extract trigrams from query
+  const queryTrigrams = [];
+  for (let i = 0; i <= norm.length - PREFIX_LEN; i++) {
+    queryTrigrams.push(norm.substring(i, i + PREFIX_LEN));
+  }
+
+  if (queryTrigrams.length === 0) {
+    // Query shorter than PREFIX_LEN: scan prefix index for matching keys
+    const results = [];
+    for (let idx = 0; idx < searchable.length; idx++) {
+      if (searchable[idx].normalizedTitle.includes(norm)) {
+        results.push({ item: searchable[idx], score: 0 });
+        if (results.length >= limit) break;
+      }
+    }
+    return results.length > 0 ? results : null;
+  }
+
+  // Intersect posting lists (smallest first for speed)
+  const lists = queryTrigrams
+    .map(tri => prefixIndex.get(tri))
+    .filter(Boolean);
+
+  if (lists.length === 0) return null;
+
+  // Sort by smallest list first
+  lists.sort((a, b) => a.length - b.length);
+
+  // Intersect using Set from smallest list
+  let candidates = new Set(lists[0]);
+  for (let i = 1; i < lists.length && candidates.size > 0; i++) {
+    const nextSet = new Set(lists[i]);
+    for (const c of candidates) {
+      if (!nextSet.has(c)) candidates.delete(c);
+    }
+  }
+
+  if (candidates.size === 0) return null;
+
+  // Verify actual substring match and score
+  const results = [];
+  for (const idx of candidates) {
+    const entry = searchable[idx];
+    const pos = entry.normalizedTitle.indexOf(norm);
+    if (pos === -1) continue;
+
+    // Score: 0 = perfect start match, higher = worse
+    const score = pos === 0 ? 0 : pos / entry.normalizedTitle.length;
+    results.push({ item: entry, score });
+  }
+
+  if (results.length === 0) return null;
+
+  results.sort((a, b) => a.score - b.score);
+  return results.slice(0, limit);
 }
 
 buildSearchIndex();
@@ -168,20 +269,30 @@ const createVideoCleaner = () => {
 // CONTENT ROUTES
 // ─────────────────────────────────────────────
 
+
 exports.list = asyncHandler(async (req, res) => {
   const p = req.query.p;
+  const cacheKey = `list:${p}`;
 
-  const animesRaw = readAnimeList();
-  const mangasRaw = readMangaList();
-  const dramasRaw = readDramaList();
+  // Intentar caché de respuesta
+  let cached = responseCache.load(cacheKey);
+  if (cached) return res.json(cached);
+
+  // Usar función optimizada de jsonService
+  const all = getAllContentLists(); // Solo 1 lectura de disco!
+  const animesRaw = all.animes;
+  const mangasRaw = all.mangas;
+  const dramasRaw = all.dramas;
 
   if (p === 'all') {
-    const all = [
+    const items = [
       ...animesRaw.map(a => ({ ...a, contentType: 'anime' })),
       ...mangasRaw.map(m => ({ ...m, contentType: 'manga' })),
       ...dramasRaw.map(d => ({ ...d, contentType: 'drama' }))
     ];
-    return res.json({ items: all });
+    const result = { items };
+    responseCache.save(cacheKey, result, 5 * 60 * 1000); // 5 min
+    return res.json(result);
   }
 
   const page = Math.max(1, parseInt(p) || 1);
@@ -196,47 +307,411 @@ exports.list = asyncHandler(async (req, res) => {
 
   const slicedItems = allItems.slice(start, start + PER_PAGE);
 
-  const items = slicedItems.map(item => ({
-    title: item.title,
-    slug: item.slug,
-    unit_id: item.unit_id,
-    image: item.image || item.cover,
-    type: item.contentType
-  }));
-
-  const mangaStartPage = Math.floor(animesRaw.length / PER_PAGE) + 1;
-  const dramaStartPage = Math.floor((animesRaw.length + mangasRaw.length) / PER_PAGE) + 1;
-
-  res.json({
+  const result = {
     page,
     total,
     totalpages: Math.ceil(total / PER_PAGE),
-    manga_start_page: mangaStartPage,
-    drama_start_page: dramaStartPage,
-    items,
-  });
+    manga_start_page: Math.floor(animesRaw.length / PER_PAGE) + 1,
+    drama_start_page: Math.floor((animesRaw.length + mangasRaw.length) / PER_PAGE) + 1,
+    items: slicedItems.map(item => ({
+      title: item.title,
+      slug: item.slug,
+      unit_id: item.unit_id,
+      image: item.image || item.cover,
+      type: item.contentType
+    }))
+  };
+
+  responseCache.save(cacheKey, result, 5 * 60 * 1000);
+  res.json(result);
 });
+
+// src/controllers/mediaController.js - exports.info optimizado
 
 exports.info = asyncHandler(async (req, res, next) => {
   const uid = parseInt(req.query.uid);
   if (!uid) return res.status(400).json({ error: 'Falta parámetro uid' });
 
-  const anime = getAnimeByUnitId(uid);
-  if (!anime.error) return animeController.info(req, res, next);
+  const cacheKey = `info:${uid}`;
+  let cached = responseCache.load(cacheKey);
+  if (cached) return res.json(cached);
 
-  const manga = getMangaByUnitId(uid);
-  if (!manga.error) return mangaController.info(req, res, next);
+  const all = getAllContentLists();
 
-  const drama = getDramaByUnitId(uid);
-  if (!drama.error) return dramaController.info(req, res, next);
+  // Buscar en qué categoría está
+  const anime = all.animes.find(a => a.unit_id === uid);
+  const manga = all.mangas.find(m => m.unit_id === uid);
+  const drama = all.dramas.find(d => d.unit_id === uid);
 
-  return res.status(404).json({
-    error: `No se encontró contenido con uid ${uid}`,
-    recommendedAnimeId: anime.recommendedId,
-    recommendedMangaId: manga.recommendedId,
-    recommendedDramaId: drama.recommendedId
-  });
+  let result = null;
+
+  if (anime) {
+    result = await getAnimeInfoOptimized(anime, uid);
+  } else if (manga) {
+    result = await getMangaInfoOptimized(manga, uid);
+  } else if (drama) {
+    result = await getDramaInfoOptimized(drama, uid);
+  } else {
+    return res.status(404).json({ error: `No se encontró contenido con uid ${uid}` });
+  }
+
+  responseCache.save(cacheKey, result, 10 * 60 * 500);
+  return res.json(result);
 });
+
+// ─────────────────────────────────────────────
+// FUNCIONES OPTIMIZADAS PARA INFO
+// ─────────────────────────────────────────────
+
+async function getAnimeInfoOptimized(anime, uid) {
+  const MIRRORS = ['FLV', 'ONE', 'TIO', 'JK', 'ANIYAE', 'HENTAILA', 'TIOHENTAI'];
+  const availableMirrors = MIRRORS.filter(m => anime.sources?.[m]);
+
+  if (availableMirrors.length === 0) {
+    return {
+      type: 'anime',
+      title: anime.title,
+      slug: anime.slug,
+      category: anime.btype === 'H' ? 'Hentai' : 'Anime',
+      eps: 0,
+      desc: '',
+      status: 'Desconocido',
+      episodes: [],
+      uid,
+      image: anime.image || '',
+      source: ''
+    };
+  }
+
+  // ── 1. OBTENER DESCRIPCIÓN (solo del primer mirror disponible) ──
+  const descCacheKey = `desc:${uid}`;
+  let description = descriptionCache.load(descCacheKey) || '';
+
+  if (!description) {
+    const firstSource = anime.sources[availableMirrors[0]];
+    if (firstSource) {
+      try {
+        description = await getDescription(firstSource);
+        if (description) {
+          descriptionCache.save(descCacheKey, description, LRU_DESCRIPTION_TTL);
+        }
+      } catch (err) {
+        console.warn(`[info/desc] Error: ${err.message}`);
+      }
+    }
+  }
+
+  // ── 2. OBTENER EPISODIOS EN PARALELO (con timeout) ──
+  const episodesPromises = availableMirrors.map(async (mirrorKey) => {
+    const sourceUrl = anime.sources[mirrorKey];
+    if (!sourceUrl) return null;
+
+    try {
+      // Timeout individual por mirror
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Timeout')), 8000)
+      );
+
+      const rawPromise = getEpisodes(sourceUrl);
+      const raw = await Promise.race([rawPromise, timeoutPromise]);
+
+      if (!raw?.episodes?.length) return null;
+
+      return {
+        mirrorKey,
+        episodes: raw.episodes,
+        isEnd: Boolean(raw.isEnd),
+        tags: raw.tags || []
+      };
+    } catch (err) {
+      console.warn(`[info/eps] ${mirrorKey}: ${err.message}`);
+      return null;
+    }
+  });
+
+  // Esperar todas las promesas (la que termine primero o todas)
+  const results = await Promise.allSettled(episodesPromises);
+
+  // Buscar el mirror con más episodios
+  let bestResult = {
+    episodes: [],
+    status: 'Desconocido',
+    source: null,
+    tags: []
+  };
+
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value) {
+      const { mirrorKey, episodes, isEnd, tags } = result.value;
+      if (episodes.length > bestResult.episodes.length) {
+        bestResult = {
+          episodes: episodes.map(ep => ({
+            num: Number(ep.number),
+            url: `/player/${uid}/${ep.number}`
+          })),
+          status: isEnd ? 'Finalizado' : 'En emisión',
+          source: mirrorKey,
+          tags: tags || []
+        };
+      }
+    }
+  }
+
+  return {
+    type: 'video',
+    title: anime.title,
+    slug: anime.slug,
+    category: anime.btype === 'H' ? 'hentai' : (anime.btype === 'A' ? 'anime' : (anime.category || null)),
+    tags: bestResult.tags,
+    eps: bestResult.episodes.length,
+    desc: description || '',
+    status: bestResult.status,
+    episodes: bestResult.episodes,
+    uid,
+    image: anime.image || '',
+    source: bestResult.source || '',
+  };
+}
+
+async function getDramaInfoOptimized(drama, uid) {
+  const MIRRORS = ['dorlat', 'dormp4'];
+  const availableMirrors = MIRRORS.filter(m => drama.sources?.[m]);
+
+  if (availableMirrors.length === 0) {
+    return {
+      type: 'drama',
+      title: drama.title,
+      slug: drama.slug,
+      category: 'drama',
+      episodes_count: 0,
+      desc: '',
+      status: 'Desconocido',
+      episodes: [],
+      uid,
+      image: drama.image || '',
+      source: '',
+      langs: [],
+      subtitles: []
+    };
+  }
+
+  // ── DESCRIPCIÓN ──
+  const descCacheKey = `desc:${uid}`;
+  let description = descriptionCache.load(descCacheKey) || '';
+
+  if (!description) {
+    const firstSource = drama.sources[availableMirrors[0]];
+    if (firstSource) {
+      try {
+        description = await getDescription(firstSource);
+        if (description) {
+          descriptionCache.save(descCacheKey, description, LRU_DESCRIPTION_TTL);
+        }
+      } catch (err) {
+        console.warn(`[info/desc] Drama error: ${err.message}`);
+      }
+    }
+  }
+
+  // ── EPISODIOS EN PARALELO ──
+  const episodesPromises = availableMirrors.map(async (mirrorKey) => {
+    const sourceUrl = drama.sources[mirrorKey];
+    if (!sourceUrl) return null;
+
+    try {
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Timeout')), 8000)
+      );
+
+      const rawPromise = getEpisodes(sourceUrl);
+      const raw = await Promise.race([rawPromise, timeoutPromise]);
+
+      if (raw && !raw.episodes && raw.chapters) {
+        raw.episodes = raw.chapters;
+      }
+
+      if (!raw?.episodes?.length) return null;
+
+      return {
+        mirrorKey,
+        episodes: raw.episodes,
+        isEnd: Boolean(raw.isEnd),
+        tags: raw.tags || [],
+        langs: raw.langs || [],
+        sub: raw.sub || []
+      };
+    } catch (err) {
+      console.warn(`[info/eps] ${mirrorKey}: ${err.message}`);
+      return null;
+    }
+  });
+
+  const results = await Promise.allSettled(episodesPromises);
+
+  let bestResult = {
+    episodes: [],
+    status: 'Desconocido',
+    source: null,
+    tags: [],
+    langs: [],
+    sub: []
+  };
+
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value) {
+      const { mirrorKey, episodes, isEnd, tags, langs, sub } = result.value;
+      if (episodes.length > bestResult.episodes.length) {
+        bestResult = {
+          episodes: episodes.map(ep => ({
+            num: Number(ep.num || ep.number),
+            url: `/player/${uid}/${ep.number}`
+          })),
+          status: isEnd ? 'Finalizado' : 'En emisión',
+          source: mirrorKey,
+          tags: tags || [],
+          langs: langs || [],
+          sub: sub || []
+        };
+      }
+    }
+  }
+
+  return {
+    type: 'drama',
+    title: drama.title,
+    slug: drama.slug,
+    category: 'drama',
+    tags: bestResult.tags,
+    episodes_count: bestResult.episodes.length,
+    desc: description || '',
+    langs: bestResult.langs,
+    subtitles: bestResult.sub,
+    status: bestResult.status,
+    episodes: bestResult.episodes,
+    uid,
+    image: drama.image || '',
+    source: bestResult.source || '',
+  };
+}
+
+async function getMangaInfoOptimized(manga, uid) {
+  const MIRRORS = ['tmo', 'oly', 'esp', 'tmonet'];
+  const availableMirrors = MIRRORS.filter(m => manga.sources?.[m]);
+
+  if (availableMirrors.length === 0) {
+    return {
+      type: 'manga',
+      title: manga.title,
+      slug: manga.slug,
+      category: 'manga',
+      chapters_count: 0,
+      desc: manga.title || '',
+      status: 'Desconocido',
+      chapters: [],
+      uid,
+      image: manga.image || '',
+      source: ''
+    };
+  }
+
+  // ── OBTENER DESCRIPCIÓN (solo del primer mirror disponible) ──
+  const descCacheKey = `desc:manga:${uid}`;
+  let description = descriptionCache.load(descCacheKey) || '';
+
+  if (!description) {
+    const firstSource = manga.sources[availableMirrors[0]];
+    if (firstSource) {
+      try {
+        description = await getDescription(firstSource);
+        if (description) {
+          descriptionCache.save(descCacheKey, description, LRU_DESCRIPTION_TTL);
+        }
+      } catch (err) {
+        console.warn(`[info/desc] Manga error: ${err.message}`);
+      }
+    }
+  }
+
+  // ── CAPÍTULOS EN PARALELO ──
+  const chaptersPromises = availableMirrors.map(async (mirrorKey) => {
+    const sourceUrl = manga.sources[mirrorKey];
+    if (!sourceUrl) return null;
+
+    try {
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Timeout')), 8000)
+      );
+
+      const rawPromise = getEpisodes(sourceUrl);
+      const raw = await Promise.race([rawPromise, timeoutPromise]);
+
+      if (raw && !raw.chapters && raw.episodes) {
+        raw.chapters = raw.episodes;
+      }
+
+      if (!raw?.chapters?.length) return null;
+
+      return {
+        mirrorKey,
+        chapters: raw.chapters,
+        isEnd: Boolean(raw.isEnd),
+        tags: raw.tags || []
+      };
+    } catch (err) {
+      console.warn(`[info/chapters] ${mirrorKey}: ${err.message}`);
+      return null;
+    }
+  });
+
+  const results = await Promise.allSettled(chaptersPromises);
+
+  let bestResult = {
+    chapters: [],
+    status: 'Desconocido',
+    source: null,
+    tags: []
+  };
+
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value) {
+      const { mirrorKey, chapters, isEnd, tags } = result.value;
+      if (chapters.length > bestResult.chapters.length) {
+        bestResult = {
+          chapters: chapters.map(ch => ({
+            num: Number(ch.num || ch.number),
+            url: `/reader/${uid}/${ch.number}`
+          })),
+          status: isEnd ? 'Finalizado' : 'En emisión',
+          source: mirrorKey,
+          tags: tags || []
+        };
+      }
+    }
+  }
+
+  // Determinar categoría
+  let category = 'manga';
+  if (manga.btype === 'Mh') category = 'manhwa';
+  else if (manga.btype === 'Mha') category = 'manhua';
+  else if (manga.btype === 'C') category = 'comic';
+  else if (manga.btype === 'N') category = 'novel';
+
+  return {
+    type: 'manga',
+    title: manga.title,
+    slug: manga.slug,
+    category: category,
+    tags: bestResult.tags,
+    chapters_count: bestResult.chapters.length,
+    desc: description || manga.title || '',  // ← Descripción añadida
+    status: bestResult.status,
+    chapters: bestResult.chapters,
+    uid,
+    image: manga.image || '',
+    source: bestResult.source || '',
+  };
+}
+
 // ─────────────────────────────────────────────
 // BASIC INFO
 // ─────────────────────────────────────────────
@@ -283,8 +758,6 @@ exports.img = asyncHandler(async (req, res) => {
     return res.status(404).json({ error: `Contenido uid=${uid} no encontrado` });
   }
 
-  const { proxyImage, getEpisodes } = require('../utils/helpers');
-
   if (type === 'cover') {
     const imageUrl = item.image || item.cover;
     if (!imageUrl) return res.status(404).json({ error: 'Sin imagen' });
@@ -322,33 +795,72 @@ exports.search = asyncHandler(async (req, res) => {
 
   let results = [];
   let limit = 20;
-  const match = query.trim().match(/^:\$([\w.]+):(.+)$/);
+  const trimmed = query.trim();
+  const match = trimmed.match(/^:\$([\w.]+):(.+)$/);
 
   if (match) {
+    // --- Advanced field filter (no caching) ---
     limit = Infinity;
     const [, keyPath, rawValue] = match;
     const targetValue = rawValue.trim().toLowerCase();
 
-    const filtered = searchable.filter(item => {
-      const getValueByPath = (obj, path) => {
-        return path.split('.').reduce((acc, part) => {
-          if (!acc) return undefined;
-          const targetKey = Object.keys(acc).find(k => k.toLowerCase() === part.toLowerCase());
-          return targetKey ? acc[targetKey] : undefined;
-        }, obj);
-      };
+    const getValueByPath = (obj, pathStr) => {
+      const parts = pathStr.split('.');
+      let acc = obj;
+      for (const part of parts) {
+        if (!acc || typeof acc !== 'object') return undefined;
+        // Use _ref for nested field access
+        const src = acc._ref || acc;
+        const targetKey = Object.keys(src).find(k => k.toLowerCase() === part.toLowerCase());
+        acc = targetKey ? src[targetKey] : undefined;
+      }
+      return acc;
+    };
 
+    const filtered = searchable.filter(item => {
       const itemVal = getValueByPath(item, keyPath);
       if (itemVal === undefined || itemVal === null) return false;
       if (typeof itemVal === 'number') return itemVal === Number(rawValue.trim());
       return String(itemVal).toLowerCase() === targetValue;
     });
-    results = filtered.map(item => ({ item: item, score: 0 }));
+    results = filtered.map(item => ({ item, score: 0 }));
   } else {
-    const term = normalize(query);
-    results = fuse.search(term);
+    // --- Standard search: check cache first ---
+    const cacheKey = normalize(trimmed);
+    const cached = substringCache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    // Tier 1: Fast trigram substring search
+    const fastResults = fastSubstringSearch(trimmed, 30);
+
+    if (fastResults && fastResults.length >= 3) {
+      results = fastResults;
+    } else {
+      // Tier 2: Fuse.js fuzzy fallback (handles typos)
+      const term = normalize(trimmed);
+      const fuseResults = fuse.search(term);
+
+      // Merge fast + fuzzy, preferring better scores
+      const merged = new Map();
+      if (fastResults) {
+        for (const r of fastResults) {
+          merged.set(Number(r.item.unit_id), r);
+        }
+      }
+      for (const r of fuseResults) {
+        const id = Number(r.item.unit_id);
+        const existing = merged.get(id);
+        if (!existing || r.score < existing.score) {
+          merged.set(id, r);
+        }
+      }
+      results = [...merged.values()];
+    }
   }
 
+  // Deduplicate by unit_id
   const unique = new Map();
   for (const r of results) {
     const id = Number(r.item.unit_id);
@@ -363,10 +875,22 @@ exports.search = asyncHandler(async (req, res) => {
       title: r.item.title,
       uid: Number(r.item.unit_id),
       unit_id: Number(r.item.unit_id),
-      image: r.item.image || r.item.cover,
+      image: r.item.image,
       type: r.item.contentType,
       score: r.score
     }));
+
+  // Cache standard search results
+  if (!match) {
+    const cacheKey = normalize(trimmed);
+    substringCache.set(cacheKey, finalResults);
+    const timer = setTimeout(() => {
+      substringCache.delete(cacheKey);
+      searchCacheTimers.delete(cacheKey);
+    }, SEARCH_CACHE_TTL);
+    timer.unref();
+    searchCacheTimers.set(cacheKey, timer);
+  }
 
   res.json(finalResults);
 });
@@ -388,8 +912,25 @@ exports.play = asyncHandler(async (req, res) => {
     uid = uid ? parseInt(uid) : undefined;
     ep = ep ? parseInt(ep) : undefined;
 
-    if (!uid) return res.status(400).json({ error: true, message: 'uid obligatorio' });
-    if (!ep) return res.status(400).json({ error: true, message: 'ep obligatorio' });
+    // Drama default language: Korean (009)
+    if ((type === 'drama' || type === 'dorama') && !lang) {
+      lang = '009';
+    }
+
+    if (!uid) {
+      return res.status(400).json({
+        error: true,
+        message: 'uid obligatorio',
+        code: 'MISSING_UID'
+      });
+    }
+    if (!ep) {
+      return res.status(400).json({
+        error: true,
+        message: 'ep obligatorio',
+        code: 'MISSING_EP'
+      });
+    }
 
     // ─────────────────────────────────────────────
     // 📖 MANGA
@@ -398,31 +939,82 @@ exports.play = asyncHandler(async (req, res) => {
       const { getEpisodes } = require('../utils/helpers');
 
       const manga = getMangaByUnitId(uid);
-      if (!manga?.unit_id) return res.status(404).json({ error: true, message: 'Manga no encontrado' });
+      if (!manga?.unit_id) {
+        return res.status(404).json({
+          error: true,
+          message: 'Manga no encontrado',
+          code: 'MANGA_NOT_FOUND',
+          data: { uid, type }
+        });
+      }
 
       const isAutoMirror = m === 'auto' || !m || m === '';
       const mirrorsToTry = isAutoMirror
         ? Object.keys(manga.sources || {}).filter(k => manga.sources[k])
         : [m];
 
-      if (mirrorsToTry.length === 0) return res.status(404).json({ error: true, message: 'No hay mirrors disponibles' });
+      if (mirrorsToTry.length === 0) {
+        return res.status(404).json({
+          error: true,
+          message: 'No hay mirrors disponibles',
+          code: 'NO_MIRRORS_AVAILABLE',
+          data: {
+            uid,
+            type,
+            availableSources: Object.keys(manga.sources || {}),
+            requestedMirror: m
+          }
+        });
+      }
 
       let validImgs = null;
       let finalMirror = null;
       let mid = null;
+      const errors = [];
 
       for (const mirrorKey of mirrorsToTry) {
         const sourceUrl = manga.sources?.[mirrorKey];
-        if (!sourceUrl) continue;
+        if (!sourceUrl) {
+          errors.push({ mirror: mirrorKey, error: 'sourceUrl no existe' });
+          continue;
+        }
 
         let raw;
-        try { raw = await getEpisodes(sourceUrl); } catch (e) { continue; }
+        try {
+          raw = await getEpisodes(sourceUrl);
+        } catch (e) {
+          errors.push({
+            mirror: mirrorKey,
+            error: 'Error en getEpisodes',
+            details: e.message,
+            stack: e.stack
+          });
+          continue;
+        }
 
-        if (raw && !raw.chapters && raw.episodes) raw.chapters = raw.episodes;
-        if (!raw?.chapters) continue;
+        if (raw && !raw.chapters && raw.episodes) {
+          raw.chapters = raw.episodes;
+        }
+
+        if (!raw?.chapters) {
+          errors.push({
+            mirror: mirrorKey,
+            error: 'No hay chapters en la respuesta',
+            rawKeys: raw ? Object.keys(raw) : null,
+            rawSample: raw ? JSON.stringify(raw).substring(0, 200) : null
+          });
+          continue;
+        }
 
         const chapter = raw.chapters.find(c => Number(c.num || c.number) === ep);
-        if (!chapter) continue;
+        if (!chapter) {
+          errors.push({
+            mirror: mirrorKey,
+            error: `Capítulo ${ep} no encontrado`,
+            availableChapters: raw.chapters.map(c => c.num || c.number)
+          });
+          continue;
+        }
 
         let coreExtractorName = mirrorKey;
         if (mirrorKey === 'olympusxyz') coreExtractorName = 'oly';
@@ -430,7 +1022,14 @@ exports.play = asyncHandler(async (req, res) => {
         if (mirrorKey === 'zonatmo') coreExtractorName = 'tmonet';
 
         const ex = getExtractor(coreExtractorName);
-        if (!ex) continue;
+        if (!ex) {
+          errors.push({
+            mirror: mirrorKey,
+            error: `Extractor ${coreExtractorName} no encontrado`,
+            availableExtractors: Object.keys(extractorMap || {})
+          });
+          continue;
+        }
 
         try {
           const imgs = await ex(chapter.url);
@@ -439,11 +1038,37 @@ exports.play = asyncHandler(async (req, res) => {
             finalMirror = mirrorKey;
             mid = generateKey(chapter.url);
             break;
+          } else {
+            errors.push({
+              mirror: mirrorKey,
+              error: 'No se encontraron imágenes',
+              imgsLength: imgs?.length || 0
+            });
           }
-        } catch (e) { continue; }
+        } catch (e) {
+          errors.push({
+            mirror: mirrorKey,
+            error: 'Error extrayendo imágenes',
+            details: e.message,
+            stack: e.stack,
+            url: chapter.url
+          });
+        }
       }
 
-      if (!validImgs) return res.status(404).json({ error: true, message: 'No se encontraron imágenes' });
+      if (!validImgs) {
+        return res.status(404).json({
+          error: true,
+          message: 'No se encontraron imágenes en ningún mirror',
+          code: 'NO_IMAGES_FOUND',
+          data: {
+            uid,
+            ep,
+            mirrorsTried: mirrorsToTry,
+            errors
+          }
+        });
+      }
 
       cache.save(mid, JSON.stringify(validImgs));
 
@@ -464,16 +1089,28 @@ exports.play = asyncHandler(async (req, res) => {
     // ─────────────────────────────────────────────
     // 📺 ANIME Y DRAMA (VIDEO)
     // ─────────────────────────────────────────────
-    const { getEpisodes } = require('../utils/helpers');
-
     let contentItem = null;
 
     if (type === 'drama' || type === 'dorama') {
       contentItem = getDramaByUnitId(uid);
-      if (!contentItem?.unit_id) return res.status(404).json({ error: true, message: 'Drama no encontrado' });
+      if (!contentItem?.unit_id) {
+        return res.status(404).json({
+          error: true,
+          message: 'Drama no encontrado',
+          code: 'DRAMA_NOT_FOUND',
+          data: { uid, type }
+        });
+      }
     } else {
       contentItem = getAnimeByUnitId(uid);
-      if (!contentItem?.unit_id) return res.status(404).json({ error: true, message: 'Anime no encontrado' });
+      if (!contentItem?.unit_id) {
+        return res.status(404).json({
+          error: true,
+          message: 'Anime no encontrado',
+          code: 'ANIME_NOT_FOUND',
+          data: { uid, type }
+        });
+      }
     }
 
     const isAutoMirror = m === 'auto' || !m || m === '';
@@ -481,38 +1118,184 @@ exports.play = asyncHandler(async (req, res) => {
       ? Object.keys(contentItem.sources || {}).filter(k => contentItem.sources[k])
       : [m];
 
-    if (mirrorsToTry.length === 0) return res.status(404).json({ error: true, message: 'No hay mirrors disponibles' });
+    if (mirrorsToTry.length === 0) {
+      return res.status(404).json({
+        error: true,
+        message: 'No hay mirrors disponibles',
+        code: 'NO_MIRRORS_AVAILABLE',
+        data: {
+          uid,
+          type,
+          availableSources: Object.keys(contentItem.sources || {}),
+          requestedMirror: m
+        }
+      });
+    }
 
     let valid = [];
     let finalMirror = null;
     const force = refresh === true || refresh === 'true';
+    const errors = [];
 
     // Obtener episodios y servidores válidos
     for (const mirrorKey of mirrorsToTry) {
       const sourceUrl = contentItem.sources?.[mirrorKey];
-      if (!sourceUrl) continue;
+      if (!sourceUrl) {
+        errors.push({ mirror: mirrorKey, error: 'sourceUrl no existe' });
+        continue;
+      }
 
       let raw;
-      try { raw = await getEpisodes(sourceUrl); } catch (e) { continue; }
+      try {
+        raw = await getEpisodes(sourceUrl);
+      } catch (e) {
+        errors.push({
+          mirror: mirrorKey,
+          error: 'Error en getEpisodes',
+          details: e.message,
+          stack: e.stack,
+          sourceUrl
+        });
+        continue;
+      }
 
-      if (raw && !raw.episodes && raw.chapters) raw.episodes = raw.chapters;
-      if (!raw?.episodes) continue;
+      if (!raw) {
+        errors.push({
+          mirror: mirrorKey,
+          error: 'raw es null/undefined',
+          sourceUrl
+        });
+        continue;
+      }
+
+      if (raw && !raw.episodes && raw.chapters) {
+        raw.episodes = raw.chapters;
+      }
+
+      if (!raw?.episodes) {
+        errors.push({
+          mirror: mirrorKey,
+          error: 'No hay episodes en la respuesta',
+          rawKeys: Object.keys(raw),
+          rawSample: JSON.stringify(raw).substring(0, 500)
+        });
+        continue;
+      }
 
       const episode = raw.episodes.find(e => Number(e.num || e.number) === ep);
-      if (!episode?.url) continue;
+      if (!episode) {
+        errors.push({
+          mirror: mirrorKey,
+          error: `Episodio ${ep} no encontrado`,
+          availableEpisodes: raw.episodes.map(e => e.num || e.number),
+          totalEpisodes: raw.episodes.length
+        });
+        continue;
+      }
 
-      const vids = await extractAllVideoLinks(episode.url, lang);
-      if (!vids || vids.status >= 700) continue;
+      if (!episode?.url) {
+        errors.push({
+          mirror: mirrorKey,
+          error: 'El episodio no tiene URL',
+          episodeData: episode
+        });
+        continue;
+      }
 
-      const filtered = await filterV(vids);
+      let vids;
+      try {
+        vids = await extractAllVideoLinks(episode.url, lang);
+      } catch (e) {
+        errors.push({
+          mirror: mirrorKey,
+          error: 'Error en extractAllVideoLinks',
+          details: e.message,
+          stack: e.stack,
+          url: episode.url,
+          lang
+        });
+        continue;
+      }
+
+      if (!vids) {
+        errors.push({
+          mirror: mirrorKey,
+          error: 'vids es null/undefined',
+          url: episode.url,
+          lang
+        });
+        continue;
+      }
+
+      if (vids.status && vids.status >= 700) {
+        errors.push({
+          mirror: mirrorKey,
+          error: 'Error en extractAllVideoLinks',
+          status: vids.status,
+          message: vids.mjs || 'Error desconocido',
+          url: episode.url,
+          lang
+        });
+        continue;
+      }
+
+      if (!Array.isArray(vids) || vids.length === 0) {
+        errors.push({
+          mirror: mirrorKey,
+          error: 'vids no es array o está vacío',
+          vidsType: typeof vids,
+          vidsLength: vids?.length,
+          url: episode.url,
+          lang
+        });
+        continue;
+      }
+
+      let filtered;
+      try {
+        filtered = await filterV(vids);
+      } catch (e) {
+        errors.push({
+          mirror: mirrorKey,
+          error: 'Error en filterV',
+          details: e.message,
+          stack: e.stack,
+          vidsCount: vids.length
+        });
+        continue;
+      }
+
       if (filtered && filtered.length > 0) {
         valid = filtered;
         finalMirror = mirrorKey;
         break;
+      } else {
+        errors.push({
+          mirror: mirrorKey,
+          error: 'No se encontraron servidores válidos después del filtro',
+          totalVids: vids.length,
+          filteredCount: filtered?.length || 0,
+          serversFound: vids.map(v => v.servidor),
+          lang
+        });
       }
     }
 
-    if (!valid.length) return res.status(404).json({ error: true, message: 'No hay servidores válidos' });
+    if (!valid.length) {
+      return res.status(404).json({
+        error: true,
+        message: 'No hay servidores válidos en ningún mirror',
+        code: 'NO_VALID_SERVERS',
+        data: {
+          uid,
+          ep,
+          type,
+          lang,
+          mirrorsTried: mirrorsToTry,
+          errors: errors.slice(0, 20) // Limit to avoid huge response
+        }
+      });
+    }
 
     const normalizedS = s !== 'auto' ? norm(s) : null;
     const sel = normalizedS ? valid.find(v => v.servidor === normalizedS) ?? valid[0] : valid[0];
@@ -526,22 +1309,35 @@ exports.play = asyncHandler(async (req, res) => {
       try {
         // 1. Servidores HLS / Stream
         if (['sw', 'voe', 'streamwish', 'uqload'].includes(server.servidor)) {
-          const { mid, Rc } = await getVid(server.servidor, server.url, null, force);
-          return {
-            success: true,
-            data: {
-              type,
-              mirror: finalMirror,
-              servers: serverNames,
-              Sserver: server.servidor,
-              url: `/api/getMedia/${mid}`,
-              mid,
-              lang: server.lang || lang || 'sub',
-              mtype: 'hls',
-              timestamp: now,
-              exp: now + 15 * 60,
-            }
-          };
+          try {
+            const { mid, Rc } = await getVid(server.servidor, server.url, null, force);
+            return {
+              success: true,
+              data: {
+                type,
+                mirror: finalMirror,
+                servers: serverNames,
+                Sserver: server.servidor,
+                url: `/api/getMedia/${mid}`,
+                mid,
+                lang: server.lang || lang || 'sub',
+                mtype: 'hls',
+                timestamp: now,
+                exp: now + 15 * 60,
+              }
+            };
+          } catch (e) {
+            return {
+              success: false,
+              error: `Error en getVid: ${e.message}`,
+              details: {
+                server: server.servidor,
+                url: server.url,
+                force,
+                stack: e.stack
+              }
+            };
+          }
         }
 
         // 2. Servidor MEGA
@@ -570,21 +1366,41 @@ exports.play = asyncHandler(async (req, res) => {
         if (!ex) {
           return {
             success: false,
-            error: `Extractor no encontrado para ${server.servidor}`
+            error: `Extractor no encontrado para ${server.servidor}`,
+            details: {
+              server: server.servidor,
+              availableExtractors: Object.keys(extractorMap || {})
+            }
           };
         }
 
         const r = await ex(server.url);
+
         if (!r || r.status >= 700) {
           return {
             success: false,
-            error: r?.mjs || 'Error en el extractor'
+            error: r?.mjs || 'Error en el extractor',
+            details: {
+              server: server.servidor,
+              url: server.url,
+              status: r?.status,
+              response: r ? JSON.stringify(r).substring(0, 200) : null
+            }
           };
         }
 
-        if (r.url) {
-          const mid = generateKey(r.url);
-          cache.save(mid, r.url);
+        // Verificar diferentes formatos de respuesta
+        let videoUrl = r.url;
+        if (!videoUrl && r.content && Array.isArray(r.content) && r.content.length > 0) {
+          videoUrl = r.content[0]?.url || r.content[0];
+        }
+        if (!videoUrl && r.hls?.content && r.hls.content.length > 0) {
+          videoUrl = r.hls.content[0]?.url || r.hls.content[0];
+        }
+
+        if (videoUrl) {
+          const mid = generateKey(videoUrl);
+          cache.save(mid, videoUrl);
           return {
             success: true,
             data: {
@@ -602,14 +1418,50 @@ exports.play = asyncHandler(async (req, res) => {
           };
         }
 
+        // Intentar con el primer contenido si existe
+        if (r.content && Array.isArray(r.content) && r.content.length > 0) {
+          const firstContent = r.content[0];
+          if (typeof firstContent === 'string') {
+            const mid = generateKey(firstContent);
+            cache.save(mid, firstContent);
+            return {
+              success: true,
+              data: {
+                type,
+                mirror: finalMirror,
+                servers: serverNames,
+                Sserver: server.servidor,
+                url: `/api/getMedia/${mid}`,
+                mid,
+                lang: server.lang || lang || 'sub',
+                mtype: 'mp4',
+                timestamp: now,
+                exp: now + 15 * 60,
+              }
+            };
+          }
+        }
+
         return {
           success: false,
-          error: 'Formato de respuesta no reconocido'
+          error: 'Formato de respuesta no reconocido',
+          details: {
+            server: server.servidor,
+            url: server.url,
+            responseType: typeof r,
+            responseKeys: r ? Object.keys(r) : null,
+            responseSample: r ? JSON.stringify(r).substring(0, 500) : null
+          }
         };
       } catch (error) {
         return {
           success: false,
-          error: error.message
+          error: error.message,
+          details: {
+            server: server.servidor,
+            url: server.url,
+            stack: error.stack
+          }
         };
       }
     }
@@ -628,13 +1480,13 @@ exports.play = asyncHandler(async (req, res) => {
     // ─────────────────────────────────────────────
     // 🔄 REINTENTOS CON MÚLTIPLES SERVIDORES
     // ─────────────────────────────────────────────
-    // Ordenar servidores: primero el seleccionado, luego los demás
     const sortedServers = [
       sel,
       ...valid.filter(v => v.servidor !== sel.servidor)
     ];
 
     let lastError = null;
+    let lastErrorDetails = null;
     let attempts = 0;
 
     for (const server of sortedServers) {
@@ -642,30 +1494,44 @@ exports.play = asyncHandler(async (req, res) => {
       const result = await processServer(server, force, lang, type, finalMirror, serverNames, now);
 
       if (result.success) {
-        console.log(`[play] Éxito con servidor: ${server.servidor}`);
         return res.json(result.data);
       }
 
       lastError = result.error;
+      lastErrorDetails = result.details || null;
     }
 
     // ─────────────────────────────────────────────
     // ⚠️ TODOS LOS SERVIDORES FALLARON
     // ─────────────────────────────────────────────
-    console.error(`[play] Todos los ${attempts} servidores fallaron. Último error: ${lastError}`);
     return res.status(404).json({
       error: true,
       message: `No se pudo obtener el video de ningún servidor. Último error: ${lastError}`,
-      attempts: attempts,
-      servers_tried: sortedServers.map(s => s.servidor)
+      code: 'ALL_SERVERS_FAILED',
+      data: {
+        uid,
+        ep,
+        type,
+        lang,
+        attempts,
+        servers_tried: sortedServers.map(s => s.servidor),
+        last_error: lastError,
+        last_error_details: lastErrorDetails,
+        errors: errors.slice(0, 10) // Include first 10 errors from mirror processing
+      }
     });
 
   } catch (e) {
-    console.error('[play] Error general:', e);
+    console.error('[play] Error crítico:', e.message);
+    console.error('[play] Stack:', e.stack);
     if (!res.headersSent) {
       res.status(500).json({
         error: true,
-        message: e.message || 'Error interno del servidor'
+        message: e.message || 'Error interno del servidor',
+        code: 'INTERNAL_ERROR',
+        data: {
+          stack: process.env.NODE_ENV === 'development' ? e.stack : undefined
+        }
       });
     }
   }

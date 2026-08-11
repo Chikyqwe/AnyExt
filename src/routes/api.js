@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
 
-const anime = require('../controllers/animeController');
 const media = require('../controllers/mediaController');
 const image = require('../controllers/imageController');
 const views = require('../controllers/viewController');
+const { getLast } = require('../services/lastService');
+const asyncHandler = require('../middlewares/asyncHandler');
 
 router.post('/api/play', media.play);
 router.get('/api/getMedia/:p', media.getMedia);
@@ -21,7 +22,18 @@ router.get('/api/list', media.list);
 router.post('/api/search', media.search);
 router.post('/api/rebuildSearch', media.rebuildSearch);
 
-router.get('/anime/last', anime.last);
+router.get('/anime/last', async (req, res) => {
+    try {
+        const data = await getLast();
+        res.json(data);
+    } catch (error) {
+        console.error('[ROUTE ERROR]', error.message);
+        res.status(500).json({
+            error: 'Error al obtener últimos episodios',
+            message: error.message
+        });
+    }
+});
 router.post('/api/img', media.img);
 router.get('/api/roku/img', image.rokuimg);
 router.get('/api', views.initmjs);

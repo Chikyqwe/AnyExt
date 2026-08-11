@@ -1,331 +1,384 @@
+// src/core/cache/cacheStorage.js — 100% IN-MEMORY CON COMPRESIÓN
+// Zero disk I/O. Los datos se comprimen con gzip cuando superan un umbral.
+
 const zlib = require("zlib");
-const fs = require("fs");
-const path = require("path");
 
-// CONFIGURACIÓN DE RUTAS
-const REGISTRY_FILE = path.join(__dirname, "../tmp/reg.json");
-const DATA_ROOT = path.join(__dirname, "../tmp/data");
+// ─────────────────────────────────────────────
+// UMBRAL: comprimir solo si el payload supera este tamaño (bytes)
+// ─────────────────────────────────────────────
+const COMPRESS_THRESHOLD = 1024; // 1KB
 
-const DIRS = {
-    text: path.join(DATA_ROOT, "text"),
-    keys: path.join(DATA_ROOT, "keys"),
-    cache: path.join(DATA_ROOT, "cache")
-};
-
-// Crear estructura de directorios
-if (!fs.existsSync(DATA_ROOT)) fs.mkdirSync(DATA_ROOT, { recursive: true });
-Object.values(DIRS).forEach(dir => {
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
-if (!fs.existsSync(REGISTRY_FILE)) fs.writeFileSync(REGISTRY_FILE, "{}", "utf8");
-
-/**
- * GESTOR DE REGISTRO GLOBAL
- */
-const GlobalRegistry = {
-    load() {
-        try { return JSON.parse(fs.readFileSync(REGISTRY_FILE, "utf8")); }
-        catch { return {}; }
-    },
-    save(data) {
-        fs.writeFileSync(REGISTRY_FILE, JSON.stringify(data, null, 4));
+// ─────────────────────────────────────────────
+// MONITOR DE RAM — Registro automático de todas las instancias
+// ─────────────────────────────────────────────
+class RamMonitor {
+    constructor() {
+        this.instances = [];
+        this.enabled = true;
     }
-};
 
-/**
- * TEXTSTORE
- */
+    register(instance) {
+        if (!this.enabled) return;
+        this.instances.push(instance);
+    }
+
+    getRamUsage() {
+        if (!this.enabled) return { totalBytes: 0, totalMB: 0, details: [] };
+
+        let totalBytes = 0;
+        const details = [];
+        const now = Date.now();
+
+        for (const instance of this.instances) {
+            if (!instance || !instance.getStats) continue;
+
+            try {
+                const stats = instance.getStats();
+                let instanceBytes = 0;
+
+                if (stats.totalOriginalBytes) {
+                    instanceBytes = stats.totalOriginalBytes;
+                } else if (stats.totalSize) {
+                    instanceBytes = stats.totalSize;
+                } else if (stats.count && stats.totalCompressedBytes) {
+                    instanceBytes = stats.totalOriginalBytes || stats.totalCompressedBytes;
+                } else {
+                    if (instance.store) {
+                        for (const [, entry] of instance.store) {
+                            if (now <= entry.exp) {
+                                instanceBytes += entry.data ? entry.data.length : 0;
+                            }
+                        }
+                    }
+                }
+
+                totalBytes += instanceBytes;
+                details.push({
+                    name: instance.constructor.name || 'Unknown',
+                    bytes: instanceBytes,
+                    mb: (instanceBytes / (1024 * 1024)).toFixed(2),
+                    stats: stats
+                });
+            } catch (err) {
+                console.warn(`[RamMonitor] Error obteniendo stats de ${instance.constructor.name}:`, err);
+            }
+        }
+
+        return {
+            totalBytes,
+            totalMB: (totalBytes / (1024 * 1024)).toFixed(2),
+            details: details.filter(d => d.bytes > 0 || d.stats?.count > 0),
+            instances: this.instances.length,
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    getStats() {
+        return this.getRamUsage();
+    }
+}
+
+// Instancia única del monitor
+const ramMonitor = new RamMonitor();
+
+// ─────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────
+function compressIfNeeded(buf) {
+    if (buf.length > COMPRESS_THRESHOLD) {
+        return { data: zlib.gzipSync(buf), compressed: true };
+    }
+    return { data: buf, compressed: false };
+}
+
+function decompressIfNeeded(entry) {
+    if (entry.compressed) {
+        return zlib.gunzipSync(entry.data);
+    }
+    return entry.data;
+}
+
+// ─────────────────────────────────────────────
+// TEXTSTORE — Almacena strings comprimidos en RAM
+// ─────────────────────────────────────────────
 class TextStore {
     constructor({ ttlMs = 5 * 60 * 1000 } = {}) {
         this.ttlMs = ttlMs;
+        this.store = new Map();
+        ramMonitor.register(this);
     }
 
-    _compress(text) { return zlib.gzipSync(text); }
-    _decompress(buffer) { return zlib.gunzipSync(buffer).toString(); }
-
     set(uuid, text) {
-        const compressed = this._compress(text);
-        const fileName = `${uuid}.gz`;
-        const filePath = path.join(DIRS.text, fileName);
+        const raw = Buffer.from(text, "utf8");
+        const { data, compressed } = compressIfNeeded(raw);
+        const exp = Date.now() + this.ttlMs;
 
-        fs.writeFileSync(filePath, compressed);
-
-        const registry = GlobalRegistry.load();
-        registry[uuid] = {
-            type: "text",
-            file: fileName,
-            size: compressed.length,
-            create: Date.now(),
-            exp: Date.now() + this.ttlMs
-        };
-        GlobalRegistry.save(registry);
+        this.store.set(uuid, { data, compressed, exp, originalSize: raw.length });
 
         return {
             ok: true,
-            savedToDisk: true,
-            originalSize: Buffer.byteLength(text, "utf8"),
-            compressedSize: compressed.length
+            savedToDisk: false,
+            originalSize: raw.length,
+            compressedSize: data.length
         };
     }
 
     get(uuid) {
-        const registry = GlobalRegistry.load();
-        const entry = registry[uuid];
-
-        if (!entry || entry.type !== "text") return null;
+        const entry = this.store.get(uuid);
+        if (!entry) return null;
 
         if (Date.now() > entry.exp) {
-            this.delete(uuid);
+            this.store.delete(uuid);
             return null;
         }
 
-        const filePath = path.join(DIRS.text, entry.file);
-        if (!fs.existsSync(filePath)) return null;
-
-        return this._decompress(fs.readFileSync(filePath));
+        return decompressIfNeeded(entry).toString("utf8");
     }
 
-    delete(uuid) {
-        const registry = GlobalRegistry.load();
-        const entry = registry[uuid];
-        if (entry) {
-            try { fs.unlinkSync(path.join(DIRS.text, entry.file)); } catch { }
-            delete registry[uuid];
-            GlobalRegistry.save(registry);
-        }
-    }
     has(uuid) {
-        const registry = GlobalRegistry.load();
-        const entry = registry[uuid];
-        if (!entry || entry.type !== "text") return false;
-
-        // Verificar si expiró
+        const entry = this.store.get(uuid);
+        if (!entry) return false;
         if (Date.now() > entry.exp) {
-            this.delete(uuid);
+            this.store.delete(uuid);
             return false;
         }
         return true;
     }
+
+    delete(uuid) {
+        this.store.delete(uuid);
+    }
+
     cleanup() {
         const now = Date.now();
-        const registry = GlobalRegistry.load();
-        let changed = false;
+        for (const [key, entry] of this.store) {
+            if (now > entry.exp) this.store.delete(key);
+        }
+    }
 
-        for (const [id, entry] of Object.entries(registry)) {
-            if (entry.type === "text" && now > entry.exp) {
-                try {
-                    fs.unlinkSync(path.join(DIRS.text, entry.file));
-                } catch { }
-                delete registry[id];
-                changed = true;
+    getStats() {
+        let totalCompressed = 0;
+        let totalOriginal = 0;
+        let count = 0;
+        const now = Date.now();
+        for (const [, entry] of this.store) {
+            if (now <= entry.exp) {
+                totalCompressed += entry.data.length;
+                totalOriginal += entry.originalSize;
+                count++;
             }
         }
-        if (changed) GlobalRegistry.save(registry);
+        return {
+            count,
+            totalCompressedBytes: totalCompressed,
+            totalOriginalBytes: totalOriginal,
+            compressionRatio: totalOriginal > 0 ? (totalCompressed / totalOriginal).toFixed(2) : 'N/A'
+        };
     }
 }
 
-/**
- * KEYSTORE
- */
+// ─────────────────────────────────────────────
+// KEYSTORE — Almacena objetos serializados + comprimidos en RAM
+// ─────────────────────────────────────────────
 class keyStore {
     constructor({ ttlMs = 15 * 60 * 1000 } = {}) {
         this.ttlMs = ttlMs;
+        this.store = new Map();
+        ramMonitor.register(this);
     }
 
-    _compress(obj) { return zlib.gzipSync(JSON.stringify(obj)); }
-    _decompress(buffer) { return JSON.parse(zlib.gunzipSync(buffer).toString()); }
-
     set(keyId, keyData) {
-        const compressed = this._compress(keyData);
-        const fileName = `${keyId}.json.gz`;
-        const filePath = path.join(DIRS.keys, fileName);
+        const raw = Buffer.from(JSON.stringify(keyData), "utf8");
+        const { data, compressed } = compressIfNeeded(raw);
+        const exp = Date.now() + this.ttlMs;
 
-        fs.writeFileSync(filePath, compressed);
-
-        const registry = GlobalRegistry.load();
-        registry[keyId] = {
-            type: "key",
-            file: fileName,
-            size: compressed.length,
-            create: Date.now(),
-            exp: Date.now() + this.ttlMs
-        };
-        GlobalRegistry.save(registry);
+        this.store.set(keyId, { data, compressed, exp, size: raw.length });
     }
 
     get(keyId) {
-        const registry = GlobalRegistry.load();
-        const entry = registry[keyId];
-
-        if (!entry || entry.type !== "key") return null;
+        const entry = this.store.get(keyId);
+        if (!entry) return null;
 
         if (Date.now() > entry.exp) {
-            this.delete(keyId);
+            this.store.delete(keyId);
             return null;
         }
 
-        const filePath = path.join(DIRS.keys, entry.file);
-        if (!fs.existsSync(filePath)) return null;
+        const buf = decompressIfNeeded(entry);
+        return JSON.parse(buf.toString("utf8"));
+    }
 
-        return this._decompress(fs.readFileSync(filePath));
+    has(keyId) {
+        const entry = this.store.get(keyId);
+        if (!entry) return false;
+        if (Date.now() > entry.exp) {
+            this.store.delete(keyId);
+            return false;
+        }
+        return true;
     }
 
     delete(keyId) {
-        const registry = GlobalRegistry.load();
-        const entry = registry[keyId];
-        if (entry) {
-            try { fs.unlinkSync(path.join(DIRS.keys, entry.file)); } catch { }
-            delete registry[keyId];
-            GlobalRegistry.save(registry);
-        }
+        this.store.delete(keyId);
     }
+
+    clear() {
+        const count = this.store.size;
+        this.store.clear();
+        console.log(`[KeyStore] Clear completado: ${count} entradas eliminadas de RAM`);
+    }
+
     cleanup() {
         const now = Date.now();
-        const registry = GlobalRegistry.load();
-        let changed = false;
-
-        for (const [id, entry] of Object.entries(registry)) {
-            // Solo procesamos entradas de tipo "key"
-            if (entry.type === "key" && now > entry.exp) {
-                try {
-                    const filePath = path.join(DIRS.keys, entry.file);
-                    if (fs.existsSync(filePath)) {
-                        fs.unlinkSync(filePath);
-                    }
-                } catch (err) {
-                    console.error(`[KeyStore Cleanup Error] ${id}:`, err.message);
-                }
-                delete registry[id];
-                changed = true;
+        let cleaned = 0;
+        for (const [key, entry] of this.store) {
+            if (now > entry.exp) {
+                this.store.delete(key);
+                cleaned++;
             }
         }
-
-        if (changed) {
-            GlobalRegistry.save(registry);
-            console.log(`[KeyStore] Cleanup ejecutado: registros expirados eliminados.`);
+        if (cleaned > 0) {
+            console.log(`[KeyStore] Cleanup: ${cleaned} entradas expiradas eliminadas`);
         }
+    }
+
+    getStats() {
+        let totalSize = 0;
+        let count = 0;
+        const now = Date.now();
+        const expired = [];
+        for (const [key, entry] of this.store) {
+            if (now > entry.exp) {
+                expired.push(key);
+            } else {
+                totalSize += entry.data.length;
+                count++;
+            }
+        }
+        return {
+            total: count,
+            expired: expired.length,
+            totalSize,
+            totalSizeMB: (totalSize / (1024 * 1024)).toFixed(2)
+        };
     }
 }
 
-/**
- * SIMPLECACHE
- */
+// ─────────────────────────────────────────────
+// SIMPLECACHE — Cache genérico en RAM con compresión
+// ─────────────────────────────────────────────
 class SimpleCache {
     constructor(cleanInterval = 60_000) {
+        this.store = new Map();
         this.cleanInterval = setInterval(() => this.cleanup(), cleanInterval);
+        if (this.cleanInterval.unref) this.cleanInterval.unref();
+        ramMonitor.register(this);
     }
 
     set(key, value, ttl = 60_000) {
-        const fileName = `${key}.json`;
-        const filePath = path.join(DIRS.cache, fileName);
-
-        fs.writeFileSync(filePath, JSON.stringify({ value }));
-
-        const registry = GlobalRegistry.load();
-        registry[key] = {
-            type: "cache",
-            file: fileName,
-            exp: Date.now() + ttl
-        };
-        GlobalRegistry.save(registry);
+        const raw = Buffer.from(JSON.stringify(value), "utf8");
+        const { data, compressed } = compressIfNeeded(raw);
+        this.store.set(key, { data, compressed, exp: Date.now() + ttl });
     }
 
     get(key) {
-        const registry = GlobalRegistry.load();
-        const entry = registry[key];
-
-        if (!entry || entry.type !== "cache") return undefined;
+        const entry = this.store.get(key);
+        if (!entry) return undefined;
 
         if (Date.now() > entry.exp) {
-            this.delete(key);
+            this.store.delete(key);
             return undefined;
         }
 
-        try {
-            const data = JSON.parse(fs.readFileSync(path.join(DIRS.cache, entry.file), "utf8"));
-            return data.value;
-        } catch { return undefined; }
+        const buf = decompressIfNeeded(entry);
+        return JSON.parse(buf.toString("utf8"));
+    }
+
+    has(key) {
+        const entry = this.store.get(key);
+        if (!entry) return false;
+        if (Date.now() > entry.exp) {
+            this.store.delete(key);
+            return false;
+        }
+        return true;
+    }
+
+    del(key) {
+        this.store.delete(key);
     }
 
     delete(key) {
-        const registry = GlobalRegistry.load();
-        const entry = registry[key];
-        if (entry) {
-            try { fs.unlinkSync(path.join(DIRS.cache, entry.file)); } catch { }
-            delete registry[key];
-            GlobalRegistry.save(registry);
-        }
+        this.store.delete(key);
     }
 
     cleanup() {
         const now = Date.now();
-        const registry = GlobalRegistry.load();
-        let changed = false;
-
-        for (const [id, entry] of Object.entries(registry)) {
-            if (now > entry.exp) {
-                try {
-                    const folder = DIRS[entry.type];
-                    fs.unlinkSync(path.join(folder, entry.file));
-                } catch { }
-                delete registry[id];
-                changed = true;
-            }
+        for (const [key, entry] of this.store) {
+            if (now > entry.exp) this.store.delete(key);
         }
-
-        if (changed) GlobalRegistry.save(registry);
     }
 
-    stop() { clearInterval(this.cleanInterval); }
+    getStats() {
+        let totalSize = 0;
+        let count = 0;
+        const now = Date.now();
+        for (const [, entry] of this.store) {
+            if (now <= entry.exp) {
+                totalSize += entry.data.length;
+                count++;
+            }
+        }
+        return {
+            count,
+            totalSize,
+            totalSizeMB: (totalSize / (1024 * 1024)).toFixed(2)
+        };
+    }
+
+    stop() {
+        clearInterval(this.cleanInterval);
+    }
 }
-/**
- * MEMCACHE (In-Memory con límites estrictos)
- */
+
+// ─────────────────────────────────────────────
+// MEMCACHE — Cache en RAM puro (sin compresión)
+// ─────────────────────────────────────────────
 class MemCache {
     constructor({
-        maxEntries = 100,           // Máximo de elementos en RAM
-        maxStringLength = 50000,    // ~50KB por entrada de texto
+        maxEntries = 100,
+        maxStringLength = 50000,
         cleanInterval = 30000
     } = {}) {
         this.cache = new Map();
         this.maxEntries = maxEntries;
         this.maxStringLength = maxStringLength;
         this.timer = setInterval(() => this.cleanup(), cleanInterval);
+        if (this.timer.unref) this.timer.unref();
+        ramMonitor.register(this);
     }
 
     set(key, value, ttl = 60000) {
-        // 1. Validar límites de tamaño si es string
         if (typeof value === 'string' && value.length > this.maxStringLength) {
-            console.warn(`MemCache: Entry "${key}" exceeds size limit.`);
+            console.warn(`MemCache: Entry "${key}" exceeds size limit (${value.length} > ${this.maxStringLength}).`);
             return false;
         }
 
-        // 2. Control de capacidad (Evicción simple)
         if (this.cache.size >= this.maxEntries) {
             const firstKey = this.cache.keys().next().value;
-            this.delete(firstKey);
+            this.cache.delete(firstKey);
         }
 
-        const expiresAt = Date.now() + ttl;
-        this.cache.set(key, { value, exp: expiresAt });
-
-        // Registrar en el registro global (marcado como tipo memoria)
-        const registry = GlobalRegistry.load();
-        registry[key] = {
-            type: "mem",
-            file: "RAM", // No tiene archivo físico
-            exp: expiresAt
-        };
-        GlobalRegistry.save(registry);
+        this.cache.set(key, { value, exp: Date.now() + ttl });
         return true;
     }
 
     get(key) {
         const entry = this.cache.get(key);
+        if (!entry) return undefined;
 
-        // Si no está en RAM o expiró
-        if (!entry || Date.now() > entry.exp) {
-            this.delete(key);
+        if (Date.now() > entry.exp) {
+            this.cache.delete(key);
             return undefined;
         }
 
@@ -334,106 +387,68 @@ class MemCache {
 
     delete(key) {
         this.cache.delete(key);
-        const registry = GlobalRegistry.load();
-        if (registry[key] && registry[key].type === "mem") {
-            delete registry[key];
-            GlobalRegistry.save(registry);
-        }
     }
 
     cleanup() {
         const now = Date.now();
-        const registry = GlobalRegistry.load();
-        let changed = false;
+        for (const [key, entry] of this.cache) {
+            if (now > entry.exp) this.cache.delete(key);
+        }
+    }
 
-        // Limpiar RAM
-        for (const [key, entry] of this.cache.entries()) {
-            if (now > entry.exp) {
-                this.cache.delete(key);
-                if (registry[key]) {
-                    delete registry[key];
-                    changed = true;
-                }
+    getStats() {
+        let totalSize = 0;
+        let count = 0;
+        const now = Date.now();
+        for (const [, entry] of this.cache) {
+            if (now <= entry.exp) {
+                const size = entry.value ? JSON.stringify(entry.value).length : 0;
+                totalSize += size;
+                count++;
             }
         }
-
-        if (changed) GlobalRegistry.save(registry);
+        return {
+            count,
+            totalSize,
+            totalSizeMB: (totalSize / (1024 * 1024)).toFixed(2)
+        };
     }
+
     dump() {
         const result = {};
         const now = Date.now();
-
-        for (const [key, entry] of this.cache.entries()) {
+        for (const [key, entry] of this.cache) {
             if (now <= entry.exp) {
                 result[key] = entry.value;
             }
         }
-
         return result;
     }
+
     stop() {
         clearInterval(this.timer);
     }
 }
+
+// ─────────────────────────────────────────────
+// DUMP ALL (para debugging)
+// ─────────────────────────────────────────────
 function dumpAllCache() {
-    const registry = GlobalRegistry.load();
-    const result = {};
-
-    for (const [key, entry] of Object.entries(registry)) {
-        try {
-            // Si expiró, lo ignoramos
-            if (Date.now() > entry.exp) continue;
-
-            let value = null;
-
-            switch (entry.type) {
-                case "text": {
-                    const filePath = path.join(DIRS.text, entry.file);
-                    if (fs.existsSync(filePath)) {
-                        const buffer = fs.readFileSync(filePath);
-                        value = zlib.gunzipSync(buffer).toString();
-                    }
-                    break;
-                }
-
-                case "key": {
-                    const filePath = path.join(DIRS.keys, entry.file);
-                    if (fs.existsSync(filePath)) {
-                        const buffer = fs.readFileSync(filePath);
-                        value = JSON.parse(zlib.gunzipSync(buffer).toString());
-                    }
-                    break;
-                }
-
-                case "cache": {
-                    const filePath = path.join(DIRS.cache, entry.file);
-                    if (fs.existsSync(filePath)) {
-                        const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
-                        value = data.value;
-                    }
-                    break;
-                }
-
-                case "mem": {
-                    value = memCacheInstance ? memCacheInstance.dump()[key] : null;
-                    break;
-                }
-            }
-
-            result[key] = {
-                type: entry.type,
-                value,
-                exp: entry.exp
-            };
-
-        } catch (err) {
-            result[key] = {
-                error: true,
-                message: err.message
-            };
-        }
-    }
-
-    return result;
+    console.warn('[dumpAllCache] En modo RAM, cada instancia de cache es independiente.');
+    return {};
 }
-module.exports = { TextStore, keyStore, SimpleCache, MemCache, dumpAllCache };
+
+// ─────────────────────────────────────────────
+// EXPORTACIONES - ¡TODAS las que necesitamos!
+// ─────────────────────────────────────────────
+module.exports = {
+    TextStore,
+    keyStore,
+    SimpleCache,
+    MemCache,
+    dumpAllCache,
+    ramMonitor,          // <-- Exportado
+    decompressIfNeeded,  // <-- Exportado
+    compressIfNeeded,    // <-- Exportado (por si acaso)
+    COMPRESS_THRESHOLD   // <-- Exportado (por si acaso)
+};

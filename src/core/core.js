@@ -5,7 +5,7 @@ const cheerio = require('cheerio');
 const { URL } = require('url');
 const crypto = require('crypto');
 const { TextCache } = require('./cache/cache');
-const linksCache = new TextCache({ ttlMs: 10 * 60 * 1000 });
+const { linksCache } = require('./cache/cacheInstances');
 
 // ================== AXIOS ==================
 const UA_FIREFOX =

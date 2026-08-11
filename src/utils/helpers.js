@@ -9,9 +9,18 @@ const vm = require('vm');
 const { http, https } = require('follow-redirects');
 const httpNative = require('http');
 const httpsNative = require('https');
-const genmap = require("./maps/map.json")
+const genmap = require("./maps/map.json");
 const { axiosGet } = require('../core/helpersCore');
 const { getSR } = require('../core/models/basic_models/helpers/sr');
+const { TextCache, KeyCache } = require('../core/cache/cache');
+
+// ─────────────────────────────────────────────
+// INICIALIZAR CACHÉS CENTRALIZADOS
+// ─────────────────────────────────────────────
+// Usar KeyCache para objetos (episodios y descripciones)
+const episodesCache = new KeyCache({ ttlMs: 15 * 60 * 1000 });    // 15 min - GUARDA OBJETOS
+const descriptionCache = new KeyCache({ ttlMs: 30 * 60 * 1000 }); // 30 min - GUARDA STRINGS
+const patternCache = new KeyCache({ ttlMs: 60 * 60 * 1000 });     // 1 hora - GUARDA OBJETOS
 
 // ============================================================================
 // MÓDULO: HTTP / AXIOS
@@ -44,42 +53,75 @@ const ParseModule = (() => {
 })();
 
 // ============================================================================
-// MÓDULO: PATRONES (CACHE)
+// MÓDULO: PATRONES (CACHE CENTRALIZADO)
+// ============================================================================
+// ============================================================================
+// MÓDULO: PATRONES (CACHE CENTRALIZADO)
 // ============================================================================
 const PatternModule = (() => {
-  const cache = { animeflv: { data: null, ts: 0 }, tio: { data: null, ts: 0 } };
-  const TTL = 60 * 60 * 1000;
-
   async function getAnimeFLVPattern() {
-    if (cache.animeflv.data && Date.now() - cache.animeflv.ts < TTL) return cache.animeflv.data;
-    cache.animeflv.data = { thumbnail: (id, ep) => `https://cdn.animeflv.net/screenshots/${id}/${ep}/th_3.jpg` };
-    cache.animeflv.ts = Date.now();
-    return cache.animeflv.data;
+    const cacheKey = 'animeflv_pattern';
+
+    const cached = patternCache.load(cacheKey);
+    if (cached) {
+      // Reconstruir la función desde los datos guardados
+      return {
+        thumbnail: (id, ep) => `https://cdn.animeflv.net/screenshots/${id}/${ep}/th_3.jpg`
+      };
+    }
+
+    // Generar nuevo patrón (solo datos, sin funciones)
+    const patternData = {
+      baseUrl: 'https://cdn.animeflv.net/screenshots'
+    };
+
+    patternCache.save(cacheKey, patternData);
+
+    // Devolver con la función reconstruida
+    return {
+      thumbnail: (id, ep) => `https://cdn.animeflv.net/screenshots/${id}/${ep}/th_3.jpg`
+    };
   }
 
   async function getTioPattern() {
-    if (cache.tio.data && Date.now() - cache.tio.ts < TTL) return cache.tio.data;
-    cache.tio.data = {
+    const cacheKey = 'tio_pattern';
+
+    const cached = patternCache.load(cacheKey);
+    if (cached) {
+      // Reconstruir las funciones desde los datos guardados
+      return {
+        episode: (slug, ep) => `https://tioanime.com/ver/${slug}-${ep}`,
+        thumbnail: id => `https://tioanime.com/uploads/thumbs/${id}.jpg`
+      };
+    }
+
+    // Generar nuevo patrón (solo datos, sin funciones)
+    const patternData = {
+      baseUrl: 'https://tioanime.com'
+    };
+
+    patternCache.save(cacheKey, patternData);
+
+    // Devolver con las funciones reconstruidas
+    return {
       episode: (slug, ep) => `https://tioanime.com/ver/${slug}-${ep}`,
       thumbnail: id => `https://tioanime.com/uploads/thumbs/${id}.jpg`
     };
-    cache.tio.ts = Date.now();
-    return cache.tio.data;
   }
 
   return { getAnimeFLVPattern, getTioPattern };
 })();
+
 // ============================================================================
 // MÓDULO: STREAMING / PROXY
 // ============================================================================
 const StreamModule = (() => {
-
   function getRefererForHost(host) {
     if (!host) return 'https://www.mp4upload.com/';
     if (host.includes('burstcloud')) return 'https://burstcloud.co/';
     if (host.includes('vidcache')) return 'https://www.yourupload.com/';
     if (host.includes('mp4upload')) return 'https://www.mp4upload.com/';
-    if (host.includes('ok')) return 'https://ok.ru'
+    if (host.includes('ok')) return 'https://ok.ru';
     return 'https://ok.ru';
   }
 
@@ -106,7 +148,8 @@ const StreamModule = (() => {
           port: u.port || (isHttps ? 443 : 80),
           path: (u.pathname || '/') + (u.search || ''),
           headers: {
-            Referer: 'https://www.yourupload.com/', 'User-Agent': 'Mozilla/5.0',
+            Referer: 'https://www.yourupload.com/',
+            'User-Agent': 'Mozilla/5.0',
             ...(method === 'GET' ? { Range: 'bytes=0-1023' } : {})
           },
           agent, timeout: timeoutMs
@@ -172,7 +215,6 @@ const StreamModule = (() => {
   function streamVideo(videoUrl, req, res) {
     if (!videoUrl) return res.status(400).send('Falta parámetro videoUrl');
     const referer = getRefererForHost(videoUrl);
-    // CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -182,8 +224,6 @@ const StreamModule = (() => {
     const isHttps = parsedUrl.protocol === 'https:';
     const protocol = isHttps ? https : http;
 
-
-    // Offset inicial desde el header Range del cliente
     let byteOffset = 0;
     const rangeHeader = req.headers.range;
     if (rangeHeader) {
@@ -215,12 +255,10 @@ const StreamModule = (() => {
         'Referer': referer,
         'Origin': referer,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        // Opcional pero recomendado para streaming
         'Accept': '*/*',
         'Accept-Encoding': 'identity',
       };
 
-      // Si hay un byte offset mayor a 0 o queremos asegurar compatibilidad con rangos
       if (fromByte > 0) {
         reqHeaders['Range'] = `bytes=${fromByte}-`;
       }
@@ -239,7 +277,6 @@ const StreamModule = (() => {
 
         retries = 0;
 
-        // Si el servidor de origen rechaza la petición
         if (originRes.statusCode >= 400) {
           console.error(`[streamVideo] Origen respondió con HTTP ${originRes.statusCode} para la URL: ${videoUrl}`);
           originRes.resume();
@@ -317,7 +354,7 @@ const StreamModule = (() => {
 })();
 
 // ============================================================================
-// MÓDULO: SCRAPERS
+// MÓDULO: SCRAPERS (mantener igual)
 // ============================================================================
 const ScraperModule = (() => {
   function slugify(text) {
@@ -1237,27 +1274,20 @@ const ScraperModule = (() => {
     extractdormp4
   };
 })();
-
 // ============================================================================
-// FUNCIONES PÚBLICAS
+// FUNCIONES PÚBLICAS CON CACHE CENTRALIZADO
 // ============================================================================
-const episodesCache = new Map();
-const EPISODES_CACHE_TTL = 15 * 60 * 1000;
-
-const descriptionCache = new Map();
-const DESC_CACHE_TTL = 30 * 60 * 1000;
 
 async function getEpisodes(url) {
   if (!url) {
     return { success: false, error: 'URL vacía' };
   }
 
-  const now = Date.now();
-  if (episodesCache.has(url)) {
-    const cached = episodesCache.get(url);
-    if (now - cached.ts < EPISODES_CACHE_TTL && cached.data) {
-      return cached.data;
-    }
+  // Intentar cargar desde caché (KeyCache guarda objetos directamente)
+  const cacheKey = `episodes:${url}`;
+  const cached = episodesCache.load(cacheKey);
+  if (cached) {
+    return cached;
   }
 
   try {
@@ -1307,8 +1337,9 @@ async function getEpisodes(url) {
       };
     }
 
+    // Guardar en caché si hay resultados válidos (KeyCache guarda objetos directamente)
     if (result && (result.episodes?.length || result.chapters?.length)) {
-      episodesCache.set(url, { data: result, ts: now });
+      episodesCache.save(cacheKey, result);
     }
 
     return result;
@@ -1327,12 +1358,11 @@ async function getEpisodes(url) {
 async function getDescription(url) {
   if (!url) return '';
 
-  const now = Date.now();
-  if (descriptionCache.has(url)) {
-    const cached = descriptionCache.get(url);
-    if (now - cached.ts < DESC_CACHE_TTL) {
-      return cached.data;
-    }
+  // Intentar cargar desde caché (KeyCache guarda strings directamente)
+  const cacheKey = `description:${url}`;
+  const cached = descriptionCache.load(cacheKey);
+  if (cached) {
+    return cached;
   }
 
   try {
@@ -1347,77 +1377,54 @@ async function getDescription(url) {
     const $ = cheerio.load(data);
     const host = new URL(url).hostname;
 
-    // 1. EXTRAER DATOS CRÍTICOS ANTES DE LIMPIAR EL HTML
     let nuxtDataRaw = null;
     if (/olympusxyz\./.test(host)) {
       nuxtDataRaw = $('#__NUXT_DATA__').html();
     }
 
-    // 2. Limpieza previa común (Ahora sí, removemos scripts sin romper Olympus)
     $('script, style, noscript').remove();
 
-    // Filtro inteligente para el fallback
     const esBasura = (t) =>
       t.length < 80 ||
       ['ningún vídeo', 'alojado', 'nuestros servidores', 'correo',
         'plataforma', 'indexer', 'menores de edad', 'ver online'].some(w => t.toLowerCase().includes(w));
 
+    let resultText = '';
 
     if (/animeflv\.(net|one)$/.test(host)) {
-      return $('section.WdgtCn .Description p').first().text().trim();
-    }
-
-    if (/tioanime\./.test(host)) {
-      return $('aside p.sinopsis').first().text().trim();
-    }
-
-    if (/tiohentai\./.test(host)) {
-      return $('aside p.sinopsis').first().text().trim();
-    }
-
-    if (/hentaila\./.test(host)) {
-      return $('div.entry p').first().text().trim();
-    }
-
-    if (/aniyae\./.test(host)) {
-      return $('div.border-l-2.pl-4').first().text().trim();
-    }
-
-    if (/zonatmo\.net$/.test(host)) {
-      const p = "https://zonatmo.net/wp-api/api/single" + (new URL(url)).pathname
+      resultText = $('section.WdgtCn .Description p').first().text().trim();
+    } else if (/tioanime\./.test(host)) {
+      resultText = $('aside p.sinopsis').first().text().trim();
+    } else if (/tiohentai\./.test(host)) {
+      resultText = $('aside p.sinopsis').first().text().trim();
+    } else if (/hentaila\./.test(host)) {
+      resultText = $('div.entry p').first().text().trim();
+    } else if (/aniyae\./.test(host)) {
+      resultText = $('div.border-l-2.pl-4').first().text().trim();
+    } else if (/zonatmo\.net$/.test(host)) {
+      const p = "https://zonatmo.net/wp-api/api/single" + (new URL(url)).pathname;
       const res = (axiosGet(p, {
         headers: {
           'User-Agent': 'Mozilla/5.0',
           'Accept': '*/*',
           'Referer': p
         }
-      })).data
-      const data = JSON.parse(res)
-      return data.data.overview
-    }
-
-    if (/zonatmo\.org$/.test(host)) {
-      return $(".element-description").text().trim();
-    }
-
-    if (/mangalect\.org$/.test(host)) {
-      return $("#synopsis-text").text().trim();
-    }
-    if (/doramaslat\./.test(host)) {
-      return $('div.entry p, .wp-content p, .description p, .entry-content p').first().text().trim() ||
+      })).data;
+      const data = JSON.parse(res);
+      resultText = data.data.overview;
+    } else if (/zonatmo\.org$/.test(host)) {
+      resultText = $(".element-description").text().trim();
+    } else if (/mangalect\.org$/.test(host)) {
+      resultText = $("#synopsis-text").text().trim();
+    } else if (/doramaslat\./.test(host)) {
+      resultText = $('div.entry p, .wp-content p, .description p, .entry-content p').first().text().trim() ||
         $('.sheader .data .row p').first().text().trim();
-    }
-
-    if (/doramasmp4\./.test(host)) {
-      return $('p.text-sm.leading-\\[20px\\]').text().trim();
-    }
-
-    if (/olympusxyz\./.test(host)) {
+    } else if (/doramasmp4\./.test(host)) {
+      resultText = $('p.text-sm.leading-\\[20px\\]').text().trim();
+    } else if (/olympusxyz\./.test(host)) {
       if (nuxtDataRaw) {
         try {
           const data = JSON.parse(nuxtDataRaw);
-
-          // Buscamos en todo el JSON el objeto que contenga las llaves de la serie
           let series = null;
           for (const item of data) {
             if (item && typeof item === 'object' && !Array.isArray(item)) {
@@ -1434,7 +1441,7 @@ async function getDescription(url) {
           if (series) {
             const stringIndex = series.summary || series.description;
             if (stringIndex && data[stringIndex]) {
-              return data[stringIndex]
+              resultText = data[stringIndex]
                 .trim()
                 .replace(/\r?\n\s*\r?\n/g, '___PARRAFO___')
                 .replace(/\r?\n/g, ' ')
@@ -1446,19 +1453,21 @@ async function getDescription(url) {
           console.error("Error al extraer la sinopsis desde Nuxt JSON:", e);
         }
       }
-      return '';
     }
 
-    // fallback genérico (usado por JKAnime y cualquier nuevo sitio sin extractor específico)
-    const fallbackText = $('p').map((_, el) => $(el).text().trim()).get().find(t => !esBasura(t));
-    const resultText = fallbackText ||
-      $('[class*="sinopsis"] p').first().text().trim() ||
-      $('[class*="sinopsis"]').first().text().trim() ||
-      '';
+    // Fallback genérico
+    if (!resultText) {
+      resultText = $('p').map((_, el) => $(el).text().trim()).get().find(t => !esBasura(t)) ||
+        $('[class*="sinopsis"] p').first().text().trim() ||
+        $('[class*="sinopsis"]').first().text().trim() ||
+        '';
+    }
 
+    // Guardar en caché si hay resultado (KeyCache guarda strings directamente)
     if (resultText) {
-      descriptionCache.set(url, { data: resultText, ts: now });
+      descriptionCache.save(cacheKey, resultText);
     }
+
     return resultText;
 
   } catch (e) {
@@ -1466,6 +1475,7 @@ async function getDescription(url) {
     return '';
   }
 }
+
 // ============================================================================
 // EXPORTS
 // ============================================================================
