@@ -268,7 +268,16 @@ const createVideoCleaner = () => {
 // ─────────────────────────────────────────────
 // CONTENT ROUTES
 // ─────────────────────────────────────────────
-
+function getContentType(item, defaultType) {
+  // Si es del archivo de anime pero tiene btype "H", lo marcamos como hentai
+  if (defaultType === 'anime' && item.btype === 'H') {
+    return 'hentai';
+  }
+  if (defaultType === 'manga' && item.btype === 'C') {
+    return 'manga';
+  }
+  return defaultType;
+}
 
 exports.list = asyncHandler(async (req, res) => {
   const p = req.query.p;
@@ -286,9 +295,9 @@ exports.list = asyncHandler(async (req, res) => {
 
   if (p === 'all') {
     const items = [
-      ...animesRaw.map(a => ({ ...a, contentType: 'anime' })),
-      ...mangasRaw.map(m => ({ ...m, contentType: 'manga' })),
-      ...dramasRaw.map(d => ({ ...d, contentType: 'drama' }))
+      ...all.animes.map(a => ({ ...a, contentType: getContentType(a, 'anime') })),
+      ...all.mangas.map(m => ({ ...m, contentType: getContentType(m, 'manga') })),
+      ...all.dramas.map(d => ({ ...d, contentType: getContentType(d, 'drama') }))
     ];
     const result = { items };
     responseCache.save(cacheKey, result, 5 * 60 * 1000); // 5 min
@@ -300,11 +309,10 @@ exports.list = asyncHandler(async (req, res) => {
   const start = (page - 1) * PER_PAGE;
 
   const allItems = [
-    ...animesRaw.map(a => ({ ...a, contentType: 'anime' })),
-    ...mangasRaw.map(m => ({ ...m, contentType: 'manga' })),
-    ...dramasRaw.map(d => ({ ...d, contentType: 'drama' }))
+    ...all.animes.map(a => ({ ...a, contentType: getContentType(a, 'anime') })),
+    ...all.mangas.map(m => ({ ...m, contentType: getContentType(m, 'manga') })),
+    ...all.dramas.map(d => ({ ...d, contentType: getContentType(d, 'drama') }))
   ];
-
   const slicedItems = allItems.slice(start, start + PER_PAGE);
 
   const result = {
