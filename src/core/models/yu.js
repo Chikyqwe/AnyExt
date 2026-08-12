@@ -14,7 +14,7 @@ module.exports = async function getJWPlayerFile(pageUrl) {
     if (match && match[1]) {
       const videoUrl = match[1];
       if (videoUrl.toLowerCase().includes('novideo.mp4')) {
-        return  { status: 708, mjs: 'Video No encontrado',server: 'yu' };
+        return { status: 708, mjs: 'Video No encontrado', server: 'yu' };
       }
       return { url: videoUrl };
     }
@@ -22,7 +22,7 @@ module.exports = async function getJWPlayerFile(pageUrl) {
     throw new Error('No se encontró URL del archivo MP4');
   } catch (err) {
     console.error('[getJWPlayerFile] Error:', err && err.message ? err.message : err);
-    return  { status: 702, mjs: err.message, server:'yu' };
+    return { status: 702, mjs: err.message, server: 'yu' };
   }
 }
 

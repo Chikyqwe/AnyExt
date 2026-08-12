@@ -89,7 +89,7 @@ async function extractST(pageUrl) {
                 const valid = await checkSTLink(data);
                 if (valid) {
                     console.log('[ST]: Link válido encontrado');
-                    return { 
+                    return {
                         url: valid
                     };
                 }
@@ -101,7 +101,7 @@ async function extractST(pageUrl) {
 
     } catch (e) {
         console.log('[ST ERROR]:' + e.message);
-        return { status: 704, msj: e.message, server: 'stape'};
+        return { status: 704, msj: e.message, server: 'stape' };
     }
 }
 
