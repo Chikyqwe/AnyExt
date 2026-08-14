@@ -29,32 +29,38 @@ function formatItem(row) {
   };
 }
 
+// Memory cache for all content lists
+let cachedAllLists = null;
+
 // Obtener listas
 function readAnimeList() {
-  if (!db) return [];
-  const stmt = db.prepare(`SELECT * FROM content WHERE contentType = 'anime'`);
-  return stmt.all().map(formatItem);
+  return getAllContentLists().animes;
 }
 
 function readMangaList() {
-  if (!db) return [];
-  const stmt = db.prepare(`SELECT * FROM content WHERE contentType = 'manga'`);
-  return stmt.all().map(formatItem);
+  return getAllContentLists().mangas;
 }
 
 function readDramaList() {
-  if (!db) return [];
-  const stmt = db.prepare(`SELECT * FROM content WHERE contentType = 'drama'`);
-  return stmt.all().map(formatItem);
+  return getAllContentLists().dramas;
 }
 
-// OBTENER TODOS LOS CONTENIDOS
+// OBTENER TODOS LOS CONTENIDOS (con caché en memoria)
 function getAllContentLists() {
-  return {
-    animes: readAnimeList(),
-    mangas: readMangaList(),
-    dramas: readDramaList()
+  if (cachedAllLists) return cachedAllLists;
+  if (!db) return { animes: [], mangas: [], dramas: [] };
+
+  const animeStmt = db.prepare(`SELECT * FROM content WHERE contentType = 'anime'`);
+  const mangaStmt = db.prepare(`SELECT * FROM content WHERE contentType = 'manga'`);
+  const dramaStmt = db.prepare(`SELECT * FROM content WHERE contentType = 'drama'`);
+
+  cachedAllLists = {
+    animes: animeStmt.all().map(formatItem),
+    mangas: mangaStmt.all().map(formatItem),
+    dramas: dramaStmt.all().map(formatItem)
   };
+
+  return cachedAllLists;
 }
 
 // FUNCIÓN DE BÚSQUEDA OPTIMIZADA
@@ -112,15 +118,16 @@ function getDramaByUnitId(unitId) {
   return { error: true, message: "No encontrado" };
 }
 
-// FUNCIÓN PARA PRECARGAR CACHÉ - ya no es necesaria con SQLite, pero la dejamos para compatibilidad
+// FUNCIÓN PARA PRECARGAR CACHÉ
 function preloadCache() {
-  console.log('[CACHE] Preload was called, but using SQLite now.');
+  console.log('[CACHE] Preloading content from SQLite into memory...');
   return getAllContentLists();
 }
 
 // FUNCIÓN PARA RECARGAR MANUALMENTE
 function reloadMemoryData() {
-  console.log('[CACHE] Reload was called, but using SQLite now.');
+  console.log('[CACHE] Reloading content memory cache...');
+  cachedAllLists = null;
   return getAllContentLists();
 }
 

@@ -265,9 +265,6 @@ const createVideoCleaner = () => {
   });
 };
 
-// ─────────────────────────────────────────────
-// CONTENT ROUTES
-// ─────────────────────────────────────────────
 function getContentType(item, defaultType) {
   // Si es del archivo de anime pero tiene btype "H", lo marcamos como hentai
   if (defaultType === 'anime' && item.btype === 'H') {
@@ -279,55 +276,78 @@ function getContentType(item, defaultType) {
   return defaultType;
 }
 
+let listMetadataCache = null;
+
+function getListMetadata() {
+  if (listMetadataCache) return listMetadataCache;
+
+  const all = getAllContentLists();
+  const animes = all.animes || [];
+  const mangas = all.mangas || [];
+  const dramas = all.dramas || [];
+
+  const items = [
+    ...animes.map(a => ({
+      title: a.title,
+      slug: a.slug,
+      unit_id: a.unit_id,
+      image: a.image || a.cover,
+      type: getContentType(a, 'anime')
+    })),
+    ...mangas.map(m => ({
+      title: m.title,
+      slug: m.slug,
+      unit_id: m.unit_id,
+      image: m.image || m.cover,
+      type: getContentType(m, 'manga')
+    })),
+    ...dramas.map(d => ({
+      title: d.title,
+      slug: d.slug,
+      unit_id: d.unit_id,
+      image: d.image || d.cover,
+      type: getContentType(d, 'drama')
+    }))
+  ];
+
+  const total = items.length;
+  listMetadataCache = {
+    items,
+    animesCount: animes.length,
+    mangasCount: mangas.length,
+    dramasCount: dramas.length,
+    total,
+    totalpages: Math.ceil(total / PER_PAGE),
+    manga_start_page: Math.floor(animes.length / PER_PAGE) + 1,
+    drama_start_page: Math.floor((animes.length + mangas.length) / PER_PAGE) + 1
+  };
+
+  return listMetadataCache;
+}
+
 exports.list = asyncHandler(async (req, res) => {
   const p = req.query.p;
-  const cacheKey = `list:${p}`;
+  const meta = getListMetadata();
 
-  // Intentar caché de respuesta
+  if (p === 'all') {
+    return res.json({ items: meta.items });
+  }
+
+  const cacheKey = `list:${p}`;
   let cached = responseCache.load(cacheKey);
   if (cached) return res.json(cached);
 
-  // Usar función optimizada de jsonService
-  const all = getAllContentLists(); // Solo 1 lectura de disco!
-  const animesRaw = all.animes;
-  const mangasRaw = all.mangas;
-  const dramasRaw = all.dramas;
-
-  if (p === 'all') {
-    const items = [
-      ...all.animes.map(a => ({ ...a, contentType: getContentType(a, 'anime') })),
-      ...all.mangas.map(m => ({ ...m, contentType: getContentType(m, 'manga') })),
-      ...all.dramas.map(d => ({ ...d, contentType: getContentType(d, 'drama') }))
-    ];
-    const result = { items };
-    responseCache.save(cacheKey, result, 5 * 60 * 1000); // 5 min
-    return res.json(result);
-  }
-
   const page = Math.max(1, parseInt(p) || 1);
-  const total = animesRaw.length + mangasRaw.length + dramasRaw.length;
   const start = (page - 1) * PER_PAGE;
-
-  const allItems = [
-    ...all.animes.map(a => ({ ...a, contentType: getContentType(a, 'anime') })),
-    ...all.mangas.map(m => ({ ...m, contentType: getContentType(m, 'manga') })),
-    ...all.dramas.map(d => ({ ...d, contentType: getContentType(d, 'drama') }))
-  ];
-  const slicedItems = allItems.slice(start, start + PER_PAGE);
+  const slicedItems = meta.items.slice(start, start + PER_PAGE);
 
   const result = {
     page,
-    total,
-    totalpages: Math.ceil(total / PER_PAGE),
-    manga_start_page: Math.floor(animesRaw.length / PER_PAGE) + 1,
-    drama_start_page: Math.floor((animesRaw.length + mangasRaw.length) / PER_PAGE) + 1,
-    items: slicedItems.map(item => ({
-      title: item.title,
-      slug: item.slug,
-      unit_id: item.unit_id,
-      image: item.image || item.cover,
-      type: item.contentType
-    }))
+    total: meta.total,
+    totalpages: meta.totalpages,
+    manga_start_page: meta.manga_start_page,
+    drama_start_page: meta.drama_start_page,
+    items: slicedItems
   };
 
   responseCache.save(cacheKey, result, 5 * 60 * 1000);
