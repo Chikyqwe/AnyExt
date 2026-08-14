@@ -3,7 +3,7 @@ const cheerio = require("cheerio");
 const fs = require("fs");
 const path = require("path");
 const PQueue = require("p-queue").default;
-const { last } = require("./lastep");
+// ❌ ELIMINADO
 const { mainm } = require('./manga/core');
 const { mainn } = require('./dramas/core')
 
@@ -21,7 +21,7 @@ const CONFIG = {
   ANIYAE_TOTAL_PAGES: 96,
   HENTAILA_TOTAL_PAGES: 50,
   TIOHENTAI_TOTAL_PAGES: 44,
-  CONCURRENT_REQUESTS: 10, // ⚡ menos concurrencia para RAM
+  CONCURRENT_REQUESTS: 10,
 };
 
 const erroresReportados = [];
@@ -63,7 +63,6 @@ async function descargarYParsear({ totalPages, tmpDir, getPageUrl, parseFn, log,
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
           if (discarded) return;
-          // Si es reintento, usa el proxy
           const fetchUrl = attempt > 0
             ? `https://anim-ext-vc.vercel.app/api/req?url=${encodeURIComponent(url)}`
             : url;
@@ -83,7 +82,7 @@ async function descargarYParsear({ totalPages, tmpDir, getPageUrl, parseFn, log,
             }
           }
 
-          $.root().remove(); // 🔥 Liberar Cheerio
+          $.root().remove();
 
           if (!discarded) {
             log(`[DOWNLOAD] [${label}] Página ${page} procesada${attempt > 0 ? " (via proxy)" : ""}`);
@@ -128,7 +127,6 @@ async function descargarYParsear({ totalPages, tmpDir, getPageUrl, parseFn, log,
     return;
   }
 
-  // Esperar a que el stream cierre completamente antes de continuar
   await new Promise((resolve, reject) => {
     writeStream.write("\n]");
     writeStream.end();
@@ -139,6 +137,7 @@ async function descargarYParsear({ totalPages, tmpDir, getPageUrl, parseFn, log,
   limpiarDirectorio(tmpDir);
   log(`[SUCCESS] [${label}] guardado en ${outputPath}`);
 }
+
 // --------------------------------------------
 // SCRAPERS
 // --------------------------------------------
@@ -212,7 +211,7 @@ const scrapeJKAnime = async (log, outputPath) => descargarYParsear({
   label: "JK",
   log,
   outputPath,
-  concurrency: 3, // 👈 limita solo JK
+  concurrency: 3,
   inter: 1000,
   getPageUrl: (p) => `https://jkanime.net/directorio?p=${p}`,
   parseFn: ($, html) => {
@@ -331,7 +330,6 @@ const UnityJsonsV4 = (sourcesPaths, outputPath, log = console.log) => {
   const add = (anime, src) => {
     if (!anime?.title) return;
 
-    // 1. Intentar usar el slug como llave principal, si no existe, usar el título normalizado
     const key = anime.slug ? anime.slug.trim().toLowerCase() : normalizarTitulo(anime.title);
 
     if (!mapa.has(key)) {
@@ -349,10 +347,10 @@ const UnityJsonsV4 = (sourcesPaths, outputPath, log = console.log) => {
     if (!existing.image && anime.image) existing.image = anime.image;
     if (!existing.slug && anime.slug) existing.slug = anime.slug;
   };
+
   for (const { path: p, src } of sourcesPaths) {
     if (!fs.existsSync(p)) continue;
 
-    // ✅ Agrega esta validación
     const content = fs.readFileSync(p, "utf-8").trim();
     if (!content || content === "[]" || content.length < 3) {
       log(`[WARNING] Archivo vacío o inválido, omitiendo: ${p}`);
@@ -362,7 +360,6 @@ const UnityJsonsV4 = (sourcesPaths, outputPath, log = console.log) => {
     try {
       const data = JSON.parse(content);
       for (const anime of data) add(anime, src);
-      // 🔥 Liberar memoria
       data.length = 0;
     } catch (err) {
       log(`[FAIL] Error parseando ${p}: ${err.message}`);
@@ -370,8 +367,7 @@ const UnityJsonsV4 = (sourcesPaths, outputPath, log = console.log) => {
   }
 
   const out = [...mapa.values()];
-  mapa.clear(); // 🔥 Liberar mapa
-
+  mapa.clear();
 
   const idsUsados = new Set();
   for (const anime of out) {
@@ -381,19 +377,43 @@ const UnityJsonsV4 = (sourcesPaths, outputPath, log = console.log) => {
     } while (idsUsados.has(randomId));
     idsUsados.add(randomId);
     anime.id = randomId;
-    const base =
-      anime.slug || anime.title;
-    anime.unit_id =
-      generarUnitID(base);
+    const base = anime.slug || anime.title;
+    anime.unit_id = generarUnitID(base);
     const hasNormalSource = Object.entries(anime.sources).some(([key, value]) => !['HENTAILA', 'TIOHENTAI'].includes(key) && value);
     const hasHentaiSource = anime.sources.HENTAILA || anime.sources.TIOHENTAI;
     anime.btype = !hasNormalSource && hasHentaiSource ? 'H' : 'A';
   }
+
   try {
-    fs.writeFileSync(outputPath, JSON.stringify({ metadata: { creado_en: new Date().toISOString(), total_animes: out.length }, animes: out }, null, 2));
+    const Database = require('better-sqlite3');
+    const dbPath = path.join(__dirname, "..", "..", "data", "database.sqlite");
+    const db = new Database(dbPath);
+
+    db.exec(`CREATE TABLE IF NOT EXISTS content (
+      unit_id INTEGER PRIMARY KEY, id INTEGER, title TEXT, slug TEXT, 
+      image TEXT, btype TEXT, contentType TEXT, sources TEXT
+    )`);
+
+    const insertContent = db.prepare(`
+      INSERT OR REPLACE INTO content (unit_id, id, title, slug, image, btype, contentType, sources)
+      VALUES (@unit_id, @id, @title, @slug, @image, @btype, @contentType, @sources)
+    `);
+
+    db.transaction((items) => {
+      db.prepare("DELETE FROM content WHERE contentType = 'anime'").run();
+      for (const item of items) {
+        insertContent.run({
+          unit_id: item.unit_id, id: item.id || null, title: item.title || '',
+          slug: item.slug || '', image: item.image || '', btype: item.btype || 'A',
+          contentType: 'anime', sources: JSON.stringify(item.sources || {})
+        });
+      }
+    })(out);
+    db.close();
+
     fs.writeFileSync(unitIDPath, JSON.stringify(unitIDsExistentes, null, 2));
-    log(`[SAVE] Guardado en ${outputPath} | Total animes: ${out.length}`);
-  } catch (err) { log("[FAIL] Error guardando archivo final:", err); }
+    log(`[SAVE] Guardado en SQLite (database.sqlite) | Total animes: ${out.length}`);
+  } catch (err) { log("[FAIL] Error guardando archivo final en SQLite:", err); }
 };
 
 // --------------------------------------------
@@ -421,23 +441,23 @@ const main = async ({ log = console.log } = {}) => {
   const outputPath = path.join(dataDir, "anime_list.json");
 
   UnityJsonsV4(sourcesPaths, outputPath, log);
+
   for (const s of sources) {
     if (fs.existsSync(s.path)) {
       fs.unlinkSync(s.path);
       log(`🗑️ Eliminado: ${s.path}`);
     }
   }
-  await last();
+
   await mainm();
   await mainn();
+
   log("[SUCCESS] Todo completado");
 
-  // 🔥 Limpiar globales
   erroresReportados.length = 0;
 
   if (global.gc) global.gc();
 };
-
 
 module.exports = { main };
 if (require.main === module) main();

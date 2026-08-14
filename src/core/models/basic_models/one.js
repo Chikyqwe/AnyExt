@@ -47,6 +47,7 @@ async function extractONE($, pageUrl) {
           'Sec-Fetch-Dest': 'empty',
           'Sec-Fetch-Mode': 'cors',
           'Sec-Fetch-Site': 'same-origin',
+          'X-Requested-With': 'XMLHttpRequest'
         },
         responseType: 'text',
         timeout: 10000

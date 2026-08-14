@@ -116,7 +116,7 @@ async function extractM3u8(pageUrl) {
         headers: {
           'User-Agent': 'Mozilla/5.0',
           'Accept': '*/*',
-          'Referer': finalUrl
+          'Referer': finalUrl,
         }
       })
     ).data;
@@ -127,7 +127,8 @@ async function extractM3u8(pageUrl) {
         headers: {
           'User-Agent': 'Mozilla/5.0',
           'Accept': '*/*',
-          'Referer': finalUrl
+          'Referer': finalUrl,
+          'Origin': finalUrl
         }
       })
     ).data;

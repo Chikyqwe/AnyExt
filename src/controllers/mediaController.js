@@ -21,7 +21,7 @@ const { descriptionCache, DESCRIPTION_TTL: LRU_DESCRIPTION_TTL } = require('../c
 const { extractAllVideoLinks, getExtractor } = require('../core/core');
 const { streamVideo, downloadVideo } = require('../utils/helpers');
 const { parseMegaUrl, verificarArchivoMega } = require('../utils/CheckMega');
-const { proxyImage, getEpisodes, getDescription } = require('../utils/helpers');
+const { proxyImage, getEpisodes, getDescription, getValidEpisodeImage, checkImageExists } = require('../utils/helpers');
 
 const PER_PAGE = 24;
 
@@ -761,37 +761,56 @@ exports.img = asyncHandler(async (req, res) => {
     isManga = false;
   }
 
-
   if (item.error) {
     return res.status(404).json({ error: `Contenido uid=${uid} no encontrado` });
   }
 
+  // Manejar cover
   if (type === 'cover') {
     const imageUrl = item.image || item.cover;
     if (!imageUrl) return res.status(404).json({ error: 'Sin imagen' });
+
+    // Verificar si la imagen existe
+    const imageExists = await checkImageExists(imageUrl);
+    if (!imageExists) {
+      // Si la imagen no existe, podrías devolver una imagen por defecto o error
+      return res.status(404).json({ error: 'Imagen no disponible' });
+    }
+
     return proxyImage(imageUrl, res);
   }
 
+  // Manejar episodio
   if (type === 'ep') {
     const epNum = parseInt(ep);
     if (!epNum) return res.status(400).json({ error: 'Falta ep' });
 
+    const MIRRORS = ['FLV', 'ONE', 'TIO', 'JK', 'ANIYAE', 'HENTAILA', 'TIOHENTAI'];
+
+    let finalImage = null;
+
     if (isAnime) {
-      const MIRRORS = ['FLV', 'ONE', 'TIO', 'JK', 'ANIYAE', 'HENTAILA', 'TIOHENTAI'];
-      for (const mirrorKey of MIRRORS) {
-        const sourceUrl = item.sources?.[mirrorKey];
-        if (!sourceUrl) continue;
-        try {
-          const raw = await getEpisodes(sourceUrl);
-          const found = raw?.episodes?.find(e => Number(e.number) === epNum);
-          if (found?.img) return proxyImage(found.img, res);
-        } catch { }
+      // Buscar imagen de episodio o fallback al cover
+      finalImage = await getValidEpisodeImage(item, epNum, MIRRORS);
+    } else {
+      // Para manga o drama, usar directamente el cover como fallback
+      const coverUrl = item.image || item.cover;
+      if (coverUrl && await checkImageExists(coverUrl)) {
+        finalImage = coverUrl;
       }
     }
-    const fallback = item.image || item.cover;
-    if (fallback) return proxyImage(fallback, res);
 
-    return res.status(404).json({ error: 'Imagen de episodio no encontrada' });
+    // Si no se encontró ninguna imagen válida
+    if (!finalImage) {
+      // Último intento: usar el cover sin verificar (por si acaso)
+      const coverUrl = item.image || item.cover;
+      if (coverUrl) {
+        return proxyImage(coverUrl, res);
+      }
+      return res.status(404).json({ error: 'Imagen de episodio no encontrada' });
+    }
+
+    return proxyImage(finalImage, res);
   }
 
   return res.status(400).json({ error: `type inválido: ${type}` });
@@ -1481,7 +1500,11 @@ exports.play = asyncHandler(async (req, res) => {
       return res.json({
         type,
         mirror: finalMirror,
-        servers: serverNames
+        servers: valid.map(v => ({
+          name: v.servidor,
+          url: v.url,
+          lang: v.lang || lang || 'sub'
+        }))
       });
     }
 

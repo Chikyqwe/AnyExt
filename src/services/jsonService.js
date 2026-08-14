@@ -1,236 +1,142 @@
-// src/services/jsonService.js - VERSIÓN CON TU CACHÉ
+// src/services/jsonService.js (Migrated to SQLite)
 
-const fs = require('fs');
 const path = require('path');
-const { JSON_FOLDER, ANIME_FILE, MANGA_FILE, DRAMA_FILE } = require('../config');
-const { KeyCache, MemoryCache } = require('../core/cache/cache');
+const Database = require('better-sqlite3');
+const { JSON_FOLDER } = require('../config');
 
-// Usar tus clases de caché existentes
-const rawJsonCache = new MemoryCache({
-  maxEntries: 10,
-  maxStringLength: 5000000 // 5MB para JSON grandes
-});
+// Initialize database
+const DB_FILE = path.join(JSON_FOLDER, 'database.sqlite');
+let db;
 
-const itemCache = new KeyCache({ ttlMs: 60 * 60 * 1000 }); // 1 hora
-const listCache = new MemoryCache({
-  maxEntries: 20,
-  maxStringLength: 5000000
-});
-
-// Guardar timestamps de modificación
-let fileStats = {
-  anime: { mtime: 0, size: 0 },
-  manga: { mtime: 0, size: 0 },
-  drama: { mtime: 0, size: 0 }
-};
-
-// Función para cargar JSON con caché
-function loadJsonWithCache(filePath, cacheKey, type) {
-  // Verificar si el archivo cambió
-  let currentStat = null;
-  try {
-    currentStat = fs.statSync(filePath);
-  } catch {
-    return { metadata: {}, animes: [] };
-  }
-
-  const stats = fileStats[type];
-  const fileChanged = currentStat.mtimeMs !== stats.mtime || currentStat.size !== stats.size;
-
-  // Si cambió, invalidar caché
-  if (fileChanged) {
-    fileStats[type] = { mtime: currentStat.mtimeMs, size: currentStat.size };
-    rawJsonCache.remove(cacheKey);
-    listCache.remove(`allContentLists`);
-    itemCache.clear(); // Limpiar caché de items individuales
-    console.log(`[CACHE] Archivo ${type} modificado, cache invalidado`);
-  }
-
-  // Intentar cargar desde caché
-  let cached = rawJsonCache.load(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
-  // Cargar desde disco
-  try {
-    const raw = fs.readFileSync(filePath, 'utf8');
-    const data = JSON.parse(raw);
-
-    // Guardar en caché
-    rawJsonCache.save(cacheKey, data);
-    console.log(`[CACHE] ${type} cargado y cacheado (${Math.round(raw.length / 1024)}KB)`);
-
-    return data;
-  } catch (err) {
-    console.error(`[ERROR] Leyendo ${filePath}:`, err);
-    return { metadata: {}, animes: [] };
-  }
+try {
+  db = new Database(DB_FILE, { readonly: true });
+} catch (err) {
+  console.error('[DB ERROR] Failed to connect to SQLite:', err);
 }
 
-// FUNCIONES OPTIMIZADAS
+// Helper to parse sources string to JSON object
+function formatItem(row) {
+  if (!row) return null;
+  return {
+    unit_id: row.unit_id,
+    id: row.id,
+    title: row.title,
+    slug: row.slug,
+    image: row.image,
+    btype: row.btype,
+    contentType: row.contentType,
+    sources: row.sources ? JSON.parse(row.sources) : {}
+  };
+}
+
+// Obtener listas
 function readAnimeList() {
-  const data = loadJsonWithCache(ANIME_FILE, 'animeData', 'anime');
-  return data.animes || [];
+  if (!db) return [];
+  const stmt = db.prepare(`SELECT * FROM content WHERE contentType = 'anime'`);
+  return stmt.all().map(formatItem);
 }
 
 function readMangaList() {
-  const data = loadJsonWithCache(MANGA_FILE, 'mangaData', 'manga');
-  return data.mangas || [];
+  if (!db) return [];
+  const stmt = db.prepare(`SELECT * FROM content WHERE contentType = 'manga'`);
+  return stmt.all().map(formatItem);
 }
 
 function readDramaList() {
-  const dramaFile = DRAMA_FILE || path.join(JSON_FOLDER, 'drama.json');
-  const data = loadJsonWithCache(dramaFile, 'dramaData', 'drama');
-  return data.doramas || [];
+  if (!db) return [];
+  const stmt = db.prepare(`SELECT * FROM content WHERE contentType = 'drama'`);
+  return stmt.all().map(formatItem);
 }
 
-// OBTENER TODOS LOS CONTENIDOS DE UNA VEZ (OPTIMIZADO)
+// OBTENER TODOS LOS CONTENIDOS
 function getAllContentLists() {
-  const cacheKey = 'allContentLists';
-
-  let cached = listCache.load(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
-  const result = {
+  return {
     animes: readAnimeList(),
     mangas: readMangaList(),
     dramas: readDramaList()
   };
-
-  // Guardar por 5 minutos
-  listCache.save(cacheKey, result);
-  return result;
 }
 
 // FUNCIÓN DE BÚSQUEDA OPTIMIZADA
 function searchAllContent(query) {
-  const searchCacheKey = `search:${query}`;
-  let cached = listCache.load(searchCacheKey);
-  if (cached) return cached;
-
-  const all = getAllContentLists();
-  const allItems = [
-    ...all.animes.map(a => ({ ...a, contentType: 'anime' })),
-    ...all.mangas.map(m => ({ ...m, contentType: 'manga' })),
-    ...all.dramas.map(d => ({ ...d, contentType: 'drama' }))
-  ];
-
-  const searchTerm = query.toLowerCase().trim();
-  let results;
+  if (!db) return [];
+  const searchTerm = (query || '').toLowerCase().trim();
 
   if (!searchTerm) {
-    results = allItems.slice(0, 20);
+    const stmt = db.prepare(`SELECT * FROM content LIMIT 20`);
+    return stmt.all().map(formatItem);
   } else {
-    results = allItems
-      .filter(item => item.title.toLowerCase().includes(searchTerm))
-      .slice(0, 20);
+    // using LIKE for basic search
+    const stmt = db.prepare(`SELECT * FROM content WHERE LOWER(title) LIKE ? LIMIT 20`);
+    return stmt.all(`%${searchTerm}%`).map(formatItem);
   }
-
-  // Guardar búsqueda por 10 minutos
-  listCache.save(searchCacheKey, results);
-  return results;
 }
 
 // FUNCIONES GET OPTIMIZADAS
 function getAnimeByUnitId(unitId) {
   const numId = parseInt(unitId, 10);
-  if (isNaN(numId)) return { error: true, message: "ID inválido" };
+  if (isNaN(numId) || !db) return { error: true, message: "ID inválido" };
 
-  const cacheKey = `animeUnitId:${numId}`;
-  let cached = itemCache.load(cacheKey);
-  if (cached) return cached;
+  const stmt = db.prepare(`SELECT * FROM content WHERE unit_id = ? AND contentType = 'anime'`);
+  const row = stmt.get(numId);
 
-  const animeList = readAnimeList();
-  let anime = animeList.find(a => a.unit_id === numId);
-
-  if (anime) {
-    itemCache.save(cacheKey, anime);
-    return anime;
+  if (row) {
+    return formatItem(row);
   }
-
-  const errorResponse = { error: true, message: "No encontrado" };
-  itemCache.save(cacheKey, errorResponse);
-  return errorResponse;
+  return { error: true, message: "No encontrado" };
 }
 
 function getMangaByUnitId(unitId) {
   const numId = parseInt(unitId, 10);
-  if (isNaN(numId)) return { error: true, message: "ID inválido" };
+  if (isNaN(numId) || !db) return { error: true, message: "ID inválido" };
 
-  const cacheKey = `mangaUnitId:${numId}`;
-  let cached = itemCache.load(cacheKey);
-  if (cached) return cached;
+  const stmt = db.prepare(`SELECT * FROM content WHERE unit_id = ? AND contentType = 'manga'`);
+  const row = stmt.get(numId);
 
-  const mangaList = readMangaList();
-  let manga = mangaList.find(m => m.unit_id === numId);
-
-  if (manga) {
-    itemCache.save(cacheKey, manga);
-    return manga;
+  if (row) {
+    return formatItem(row);
   }
-
-  const errorResponse = { error: true, message: "No encontrado" };
-  itemCache.save(cacheKey, errorResponse);
-  return errorResponse;
+  return { error: true, message: "No encontrado" };
 }
 
 function getDramaByUnitId(unitId) {
   const numId = parseInt(unitId, 10);
-  if (isNaN(numId)) return { error: true, message: "ID inválido" };
+  if (isNaN(numId) || !db) return { error: true, message: "ID inválido" };
 
-  const cacheKey = `dramaUnitId:${numId}`;
-  let cached = itemCache.load(cacheKey);
-  if (cached) return cached;
+  const stmt = db.prepare(`SELECT * FROM content WHERE unit_id = ? AND contentType = 'drama'`);
+  const row = stmt.get(numId);
 
-  const dramaList = readDramaList();
-  let drama = dramaList.find(d => d.unit_id === numId);
-
-  if (drama) {
-    itemCache.save(cacheKey, drama);
-    return drama;
+  if (row) {
+    return formatItem(row);
   }
-
-  const errorResponse = { error: true, message: "No encontrado" };
-  itemCache.save(cacheKey, errorResponse);
-  return errorResponse;
+  return { error: true, message: "No encontrado" };
 }
 
-// FUNCIÓN PARA PRECARGAR CACHÉ
+// FUNCIÓN PARA PRECARGAR CACHÉ - ya no es necesaria con SQLite, pero la dejamos para compatibilidad
 function preloadCache() {
-  console.log('[CACHE] Pre-cargando todos los contenidos...');
-  const start = Date.now();
-  const data = getAllContentLists();
-  const end = Date.now();
-  console.log(`[CACHE] Pre-carga completada en ${end - start}ms`);
-  console.log(`[CACHE] Animes: ${data.animes.length}, Mangas: ${data.mangas.length}, Dramas: ${data.dramas.length}`);
-  return data;
+  console.log('[CACHE] Preload was called, but using SQLite now.');
+  return getAllContentLists();
 }
 
 // FUNCIÓN PARA RECARGAR MANUALMENTE
 function reloadMemoryData() {
-  console.log('[CACHE] Recargando datos manualmente...');
-  // Invalidar todas las cachés
-  rawJsonCache.remove('animeData');
-  rawJsonCache.remove('mangaData');
-  rawJsonCache.remove('dramaData');
-  listCache.remove('allContentLists');
-  itemCache.clear();
-
-  // Recargar
-  return preloadCache();
+  console.log('[CACHE] Reload was called, but using SQLite now.');
+  return getAllContentLists();
 }
 
 module.exports = {
   readRawJson: () => getAllContentLists(),
   getMetadata: () => {
-    const all = getAllContentLists();
+    if (!db) return { animeCount: 0, mangaCount: 0, dramaCount: 0 };
+
+    const countAnime = db.prepare(`SELECT COUNT(*) as count FROM content WHERE contentType = 'anime'`).get().count;
+    const countManga = db.prepare(`SELECT COUNT(*) as count FROM content WHERE contentType = 'manga'`).get().count;
+    const countDrama = db.prepare(`SELECT COUNT(*) as count FROM content WHERE contentType = 'drama'`).get().count;
+
     return {
-      animeCount: all.animes.length,
-      mangaCount: all.mangas.length,
-      dramaCount: all.dramas.length
+      animeCount: countAnime,
+      mangaCount: countManga,
+      dramaCount: countDrama
     };
   },
   readAnimeList,

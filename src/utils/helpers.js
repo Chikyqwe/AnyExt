@@ -1476,12 +1476,78 @@ async function getDescription(url) {
   }
 }
 
+/**
+ * Verifica si una imagen existe y responde correctamente haciendo una solicitud HEAD
+ * @param {string} imageUrl - URL de la imagen a verificar
+ * @param {number} timeout - Tiempo de espera en milisegundos (default: 5000)
+ * @returns {Promise<boolean>} - true si la imagen responde, false en caso contrario
+ */
+const checkImageExists = async (imageUrl, timeout = 5000) => {
+  if (!imageUrl) return false;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    const response = await fetch(imageUrl, {
+      method: 'HEAD',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    clearTimeout(timeoutId);
+    return response.ok;
+  } catch (error) {
+    console.error(`Error verificando imagen ${imageUrl}:`, error.message);
+    return false;
+  }
+};
+
+/**
+ * Obtiene una imagen válida para el episodio o fallback al cover
+ * @param {Object} item - El item del contenido
+ * @param {number} epNum - Número de episodio
+ * @param {Array} mirrors - Lista de mirrors a probar
+ * @returns {Promise<string|null>} - URL de la imagen válida o null
+ */
+const getValidEpisodeImage = async (item, epNum, mirrors) => {
+  // Primero intentar con los mirrors
+  for (const mirrorKey of mirrors) {
+    const sourceUrl = item.sources?.[mirrorKey];
+    if (!sourceUrl) continue;
+    try {
+      const raw = await getEpisodes(sourceUrl);
+      const found = raw?.episodes?.find(e => Number(e.number) === epNum);
+      if (found?.img) {
+        const exists = await checkImageExists(found.img);
+        if (exists) {
+          return found.img;
+        }
+      }
+    } catch { }
+  }
+
+  // Si no se encontró en los mirrors, usar el cover como fallback
+  const coverUrl = item.image || item.cover;
+  if (coverUrl) {
+    const exists = await checkImageExists(coverUrl);
+    if (exists) {
+      return coverUrl;
+    }
+  }
+
+  return null;
+};
 // ============================================================================
 // EXPORTS
 // ============================================================================
 module.exports = {
   getEpisodes,
   getDescription,
+  checkImageExists,
+  getValidEpisodeImage,
   proxyImage: StreamModule.proxyImage,
   streamVideo: StreamModule.streamVideo,
   validateVideoUrl: StreamModule.validateVideoUrl,

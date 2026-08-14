@@ -141,17 +141,21 @@ async function combinarFuentes() {
             doramas: listaDoramas
         };
 
-        // 5. Guardar archivo final unificado
-        fs.writeFileSync(outputPath, JSON.stringify(objetoFinalCompleto, null, 2), 'utf-8');
-        console.log(`[SUCCESS] Combinación completada con éxito.`);
-        console.log(` -> Total de doramas únicos procesados: ${listaDoramas.length}`);
-        console.log(` -> Guardado en: ${outputPath}`);
+        // 5. Guardar archivo final unificado en SQLite
+        const Database = require('better-sqlite3');
+        const dbPath = path.join(__dirname, '..', '..', '..', 'data', 'database.sqlite');
+        const db = new Database(dbPath);
 
-        // 6. Si encontramos doramas nuevos o sincronizamos desde A/B, actualizamos el UnitID.json principal
-        if (huboNuevosIds) {
-            fs.writeFileSync(unitIdPath, JSON.stringify(unitIds, null, 2), 'utf-8');
-            console.log(`[UPDATED] Se actualizaron/añadieron Slugs al archivo de control UnitID.json.`);
-        }
+        // CORREGIDO:
+        db.exec(`CREATE TABLE IF NOT EXISTS content (
+        unit_id INTEGER PRIMARY KEY, id INTEGER, title TEXT, slug TEXT, 
+        image TEXT, btype TEXT, contentType TEXT, sources TEXT
+        )`);
+
+        const insertContent = db.prepare(`
+        INSERT OR REPLACE INTO content (unit_id, id, title, slug, image, btype, contentType, sources)
+        VALUES (@unit_id, @id, @title, @slug, @image, @btype, @contentType, @sources)
+        `);
 
         // 7. Limpiar archivos temporales en ./tmp sin borrar la carpeta
         const archivosParaBorrar = fs.readdirSync(tmpFolder);
