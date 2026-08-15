@@ -20,7 +20,7 @@
       --accent: #00d9c0;
       --blue: #58a6ff;
       --text: #f0f6fc;
-      --muted: #8b949e;
+      --muted: #6e747a;
       --font: 'Outfit', sans-serif;
       --jp: 'Noto Serif JP', serif;
     }
@@ -48,6 +48,7 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 24px;
+      height: 635px;
       padding: 3rem 2.5rem;
       max-width: 540px;
       width: 100%;
@@ -102,10 +103,10 @@
     }
 
     .message-text {
-      font-size: 1rem;
+      font-size: 0.7rem;
       color: var(--muted);
       line-height: 1.7;
-      margin-bottom: 2rem;
+      margin-bottom: 1.5rem;
       animation: slideUp 0.6s ease-out 0.55s both;
     }
 
@@ -121,13 +122,29 @@
       }
     }
 
+    .image-wrapper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      margin-top: -1.7rem;
+    }
+
     .anime-image {
       display: block;
-      margin: 0 auto 2rem;
-      max-width: 130px;
+      width: 160px;
+      height: auto;
       opacity: 0.85;
       filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.5));
       animation: imgIn 0.8s ease-out 0.7s both;
+    }
+
+    .credit {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-top: -1.5rem;
+      opacity: 0.7;
+      animation: slideUp 0.6s ease-out 0.8s both;
     }
 
     @keyframes imgIn {
@@ -285,6 +302,11 @@
 
       .container {
         padding: 2rem 1.5rem;
+        height: 520px;
+      }
+
+      .anime-image {
+        width: 130px;
       }
     }
   </style>
@@ -305,10 +327,12 @@
   </div>
   <div class="container">
     <h1>503</h1>
-    <p class="message-title">Ah ocurrido un error</p>
-    <p class="message-text">No se ha podido cargar la página. Por favor intenta de nuevo mas tarde. ErrCod:0x000004</p>
+    <p class="message-title">Ha ocurrido un error</p>
+    <p class="message-text">No se ha podido cargar la página. Por favor intenta de nuevo más tarde.<br>ErrCod:0x000004
+    </p>
     <div class="image-wrapper">
       <img src="/err.png" alt="Anime perdido" class="anime-image" />
+      <span class="credit">@yoruthestupid</span>
     </div>
   </div>
 </body>
