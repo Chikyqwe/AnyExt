@@ -756,6 +756,7 @@ exports.basicInfo = asyncHandler(async (req, res) => {
     type: 'anime',
     title: anime.title,
     slug: anime.slug,
+    image: anime.image,
     uid,
   });
 });
