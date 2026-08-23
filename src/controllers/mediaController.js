@@ -752,11 +752,15 @@ exports.basicInfo = asyncHandler(async (req, res) => {
     return res.status(404).json({ error: `No se encontró anime con uid=${uid}` });
   }
 
+  // Obtiene los valores del objeto source y busca el primero que tenga valor
+  const firstValidUrl = Object.values(anime.source || {}).find(url => url !== null) || null;
+
   res.json({
     type: 'anime',
     title: anime.title,
     slug: anime.slug,
     image: anime.image,
+    furl: firstValidUrl,
     uid,
   });
 });

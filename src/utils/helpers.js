@@ -1085,6 +1085,7 @@ const ScraperModule = (() => {
 
     return data;
   }
+
   async function extractdormp4(URLd) {
     const MAX_REINTENTOS = 5;
     const BASE = "https://doramasmp4.io";
@@ -1218,29 +1219,39 @@ const ScraperModule = (() => {
     resultados.forEach((res) => {
       if (!res || !res.txt) return;
 
-      try {
-        const lines = res.txt.split("\n");
-        for (const line of lines) {
-          if (line.includes("PaginationEpisodeResponse") || line.includes("items")) {
-            const colonIndex = line.indexOf(":");
-            if (colonIndex !== -1) {
-              const jsonStr = line.slice(colonIndex + 1).trim();
-              const parsedData = JSON.parse(jsonStr);
+      // Extrae todos los objetos o arrays JSON válidos usando Regex
+      const jsonMatches = res.txt.matchAll(/\{[\s\S]*?\}(?=\n|\r|$|\d+:)/g);
 
-              if (parsedData && Array.isArray(parsedData.items)) {
-                parsedData.items.forEach(ep => {
-                  contadorGlobal++;
-                  formattedEpisodes.push({
-                    num: contadorGlobal,
-                    url: `${BASE}/capitulos/${ep.slug || ''}`,
-                    img: ep.backdrop || ep.image || ep.poster || ''
-                  });
+      for (const match of jsonMatches) {
+        const rawJson = match[0];
+
+        // Validamos que sea el objeto de la lista de episodios
+        if (rawJson.includes("PaginationEpisodeResponse") || rawJson.includes('"items"')) {
+          try {
+            const parsedData = JSON.parse(rawJson);
+            const items = parsedData?.items || parsedData?.data?.items;
+
+            if (Array.isArray(items)) {
+              items.forEach(ep => {
+                contadorGlobal++;
+
+                let imgUrl = ep.still_path || ep.backdrop || ep.still_image || ep.serie_backdrop_path || '';
+                if (imgUrl && imgUrl.startsWith('/')) {
+                  imgUrl = `https://image.tmdb.org/t/p/w500${imgUrl}`;
+                }
+
+                formattedEpisodes.push({
+                  num: contadorGlobal,
+                  url: `${BASE}/capitulos/${ep.slug || ''}`,
+                  img: imgUrl
                 });
-              }
+              });
             }
+          } catch (e) {
+            // Ignora fragmentos que no sean JSONs balanceados
           }
         }
-      } catch (e) { }
+      }
     });
 
     return {
@@ -1256,7 +1267,6 @@ const ScraperModule = (() => {
       episodes: formattedEpisodes
     };
   }
-
 
   return {
     extractAnimeFLV,

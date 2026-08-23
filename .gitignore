@@ -1,4 +1,5 @@
 list.js
+dev 
 .env
 node_modules
 src/core/tmp/*
