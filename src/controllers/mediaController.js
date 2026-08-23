@@ -753,7 +753,7 @@ exports.basicInfo = asyncHandler(async (req, res) => {
   }
 
   // Obtiene los valores del objeto source y busca el primero que tenga valor
-  const firstValidUrl = Object.values(anime.source || {}).find(url => url !== null) || null;
+  const firstValidUrl = Object.values(anime.sources || {}).find(url => url !== null) || null;
 
   res.json({
     type: 'anime',
