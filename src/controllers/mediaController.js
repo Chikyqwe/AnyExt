@@ -22,7 +22,7 @@ const { extractAllVideoLinks, getExtractor } = require('../core/core');
 const { streamVideo, downloadVideo } = require('../utils/helpers');
 const { parseMegaUrl, verificarArchivoMega } = require('../utils/CheckMega');
 const { proxyImage, getEpisodes, getDescription, getValidEpisodeImage, checkImageExists } = require('../utils/helpers');
-
+const vod = process.env.VOD
 const PER_PAGE = 24;
 
 // ─────────────────────────────────────────────
@@ -1592,21 +1592,22 @@ exports.play = asyncHandler(async (req, res) => {
     }
   }
 });
-
+function encodeBase64Url(str) {
+  return Buffer.from(str).toString('base64url');
+}
 exports.getMedia = asyncHandler(async (req, res) => {
   const mid = req.params.p;
   if (!cache.exists(mid)) return res.status(403).json({ error: 'Contenido expirado. Solicite el video de nuevo.' });
 
   const content = cache.load(mid);
-
+  if (!content) { return res.status(403).json({ error: 'Contenido expirado. Solicite el video de nuevo.' }) }
   if (typeof content === 'string' && content.startsWith('http') && !content.includes('\n')) {
     // Si es la URL embed de Mega, retornarla en JSON directamente
     if (content.includes('mega.nz/embed/')) {
       return res.json({ url: content });
     }
-
-    const base = `${HTTPS ? 'https' : 'http'}://${req.get('host')}`;
-    return res.json({ url: `${base}/api/stream?gid=${mid}` });
+    const enc = encodeBase64Url(content)
+    return res.json({ url: `${vod}/api/stream?gv=${encodeURIComponent(enc)}` });
   }
 
   if (typeof content === 'string' && (content.startsWith('[') || content.startsWith('{'))) {
@@ -1623,15 +1624,9 @@ exports.getMedia = asyncHandler(async (req, res) => {
 });
 
 exports.stream = asyncHandler(async (req, res) => {
-  const v = req.query.gid || req.query.v;
-  if (!v) return res.status(400).json({ error: 'Falta parámetro "?gid" o "?v"' });
-
-  let targetUrl = v;
-  if (cache.exists(v)) {
-    const cached = cache.load(v);
-    if (typeof cached === 'string' && cached.startsWith('http')) targetUrl = cached;
-  }
-  streamVideo(targetUrl, req, res);
+  return res.status(410).json({
+    error: 'Este endpoint ha sido deshabilitado permanentemente.'
+  });
 });
 
 exports.reqProxy = asyncHandler(async (req, res) => {
@@ -1650,46 +1645,10 @@ exports.reqProxy = asyncHandler(async (req, res) => {
   }
 });
 
-const { Readable } = require('stream');
-
 exports.proxy = asyncHandler(async (req, res) => {
-  let u = req.query.url;
-  if (!u && req.query.gid) {
-    try { u = Buffer.from(req.query.gid, 'base64url').toString('utf8'); } catch (e) { }
-  }
-  if (!u) return res.status(400).json({ error: 'Falta url' });
-
-  let r = req.query.ref;
-  if (!r && req.query.f) {
-    try { r = Buffer.from(req.query.f, 'base64url').toString('utf8'); } catch (e) { }
-  }
-
-  try {
-    const response = await fetch(u, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Referer': r || ''
-      },
-      redirect: 'follow' // Sigue las redirecciones automáticas (301, 302, etc.)
-    });
-
-    if (!response.ok) {
-      return res.status(response.status).end();
-    }
-
-    res.writeHead(200, {
-      'Content-Type': 'video/MP2T',
-      'Access-Control-Allow-Origin': '*'
-    });
-
-    // Convertir el stream Web a NodeStream para poder usar .pipe()
-    const cleaner = createVideoCleaner();
-    Readable.fromWeb(response.body).pipe(cleaner).pipe(res);
-
-  } catch (e) {
-    console.error('[proxy]', e.message);
-    if (!res.headersSent) res.status(502).end();
-  }
+  return res.status(410).json({
+    error: 'Este endpoint ha sido deshabilitado permanentemente.'
+  });
 });
 
 exports.download = (req, res) => downloadVideo(req, res);

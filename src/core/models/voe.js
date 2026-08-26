@@ -1,54 +1,7 @@
 const { axiosGet, cheerio } = require('../helpersCore');
+const axios = require('axios');
+const vod = process.env.VOD
 
-// ---------- getRedirectUrl----------
-function best(master, base) {
-  const lines = master.split('\n');
-  let bestUrl = null;
-  let bestScore = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const m = /RESOLUTION=(\d+)x(\d+)/.exec(lines[i]);
-    if (!m) continue;
-
-    const next = lines[i + 1];
-    if (!next || next.startsWith('#')) continue;
-
-    const score = m[1] * m[2];
-    if (score > bestScore) {
-      bestScore = score;
-      bestUrl = new URL(next, base).href;
-    }
-  }
-  return bestUrl;
-}
-function rewriteM3U8(m3u8, playlistUrl, referer) {
-  const result = m3u8
-    .split('\n')
-    .map(line => {
-      const l = line.trim();
-
-      if (!l || l.startsWith('#')) return line;
-
-      let absoluteUrl;
-
-      if (/^https?:\/\//i.test(l)) {
-        absoluteUrl = l;
-      } else {
-        try {
-          absoluteUrl = new URL(l, playlistUrl).href;
-        } catch (e) {
-          return line;
-        }
-      }
-
-      const gid = Buffer.from(absoluteUrl).toString('base64url');
-      const f = Buffer.from(referer).toString('base64url');
-      return `https://anyext.qzz.io/api/hls?gid=${gid}&f=${f}&Did=1`;
-    })
-    .join('\n');
-
-  return result;
-}
 // Funciones de decodificación
 function rot13(str) {
   return str.replace(/[A-Za-z]/g, (c) =>
@@ -165,45 +118,21 @@ async function extractVoe(pageUrl) {
 
     if (!data?.source) return fail();
 
-    const result = {
-      mp4: data.direct_access_url || null
-    };
-
-    // Descargar master m3u8
-    const masterUrl = data.source;
-    const playlist = (
-      await axiosGet(masterUrl, {
+    // Tras verificar la existencia de data.source, realiza la llamada a la API externa
+    const { data: apiResponse } = await axios.post(
+      vod + '/api/play',
+      {
+        server: 'voe',
+        url: pageUrl
+      },
+      {
         headers: {
-          'User-Agent': 'Mozilla/5.0',
-          'Accept': '*/*',
-          'Referer': pageUrl
+          'Content-Type': 'application/json'
         }
-      })
-    ).data;
+      }
+    );
 
-    const base = masterUrl.slice(0, masterUrl.lastIndexOf('/') + 1);
-    const bestUrl = best(playlist, base) || masterUrl;
-
-    const bestPlaylistRaw = (
-      await axiosGet(bestUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0',
-          'Accept': '*/*',
-          'Referer': pageUrl
-        }
-      })
-    ).data;
-
-    const bestPlaylist = rewriteM3U8(bestPlaylistRaw, bestUrl, pageUrl);
-
-    result.hls = {
-      url: bestUrl,
-      content: bestPlaylist
-    };
-    return {
-      status: 200,
-      ...result
-    };
+    return apiResponse;
 
   } catch (err) {
     console.error('[VOE EXTRACTOR] Error inesperado:', err.message);
@@ -211,4 +140,4 @@ async function extractVoe(pageUrl) {
   }
 }
 
-module.exports = { extractVoe }
+module.exports = { extractVoe };

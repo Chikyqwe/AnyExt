@@ -1,30 +1,10 @@
 const { axiosGet } = require('../helpersCore');
 const { unpack, detect } = require('unpacker');
 const { URL } = require('url');
-const { HTTPS } = require('../../config');
+const axios = require('axios');
+const vod = process.env.VOD
 
 // ---------- getRedirectUrl----------
-function best(master, base) {
-  const lines = master.split('\n');
-  let bestUrl = null;
-  let bestScore = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const m = /RESOLUTION=(\d+)x(\d+)/.exec(lines[i]);
-    if (!m) continue;
-
-    const next = lines[i + 1];
-    if (!next || next.startsWith('#')) continue;
-
-    const score = m[1] * m[2];
-    if (score > bestScore) {
-      bestScore = score;
-      bestUrl = new URL(next, base).href;
-    }
-  }
-  return bestUrl;
-}
-
 async function redir(pageUrl) {
   try {
     const dmca = ["playnixes.com", "niramirus.com", "medixiru.com", "hgplaycdn.com", "hglamioz.com"];
@@ -44,35 +24,6 @@ async function redir(pageUrl) {
   }
 }
 
-function rewriteM3U8(m3u8, playlistUrl, referer) {
-  const result = m3u8
-    .split('\n')
-    .map(line => {
-      const l = line.trim();
-
-      if (!l || l.startsWith('#')) return line;
-
-      let absoluteUrl;
-
-      if (/^https?:\/\//i.test(l)) {
-        absoluteUrl = l;
-      } else {
-        try {
-          absoluteUrl = new URL(l, playlistUrl).href;
-        } catch (e) {
-          return line;
-        }
-      }
-
-      const gid = Buffer.from(absoluteUrl).toString('base64url');
-      const f = Buffer.from(referer).toString('base64url');
-      return `${HTTPS ? 'https' : 'http'}://${HTTPS ? 'anyext.qzz.io' : 'localhost:2022'}/api/hls?gid=${gid}&f=${f}&Did=1`;
-    })
-    .join('\n');
-
-  return result;
-}
-
 async function extractM3u8(pageUrl) {
   const fail = () => ({ status: 701, mjs: 'general error', server: 'sw' });
 
@@ -87,6 +38,7 @@ async function extractM3u8(pageUrl) {
         'Referer': finalUrl
       }
     })).data;
+
     const scriptMatch = html.match(
       /<script[^>]*type=['"]text\/javascript['"][^>]*>\s*(eval\(function\(p,a,c,k,e,d\)[\s\S]*?)<\/script>/i
     );
@@ -108,37 +60,22 @@ async function extractM3u8(pageUrl) {
 
     const link = links.hls4 || links.hls3 || links.hls1 || links.hls2;
     if (!link) return fail();
-    const masterUrl = link.startsWith('/')
-      ? new URL(link, finalUrl).href
-      : link;
-    const playlist = (
-      await axiosGet(masterUrl, {
+
+    // Confirmado que existe enlace M3U8, se envía el POST a la API externa con la URL redirigida
+    const { data: apiResponse } = await axios.post(
+      vod + '/api/play',
+      {
+        server: 'sw',
+        url: finalUrl
+      },
+      {
         headers: {
-          'User-Agent': 'Mozilla/5.0',
-          'Accept': '*/*',
-          'Referer': finalUrl,
+          'Content-Type': 'application/json'
         }
-      })
-    ).data;
-    const base = masterUrl.slice(0, masterUrl.lastIndexOf('/') + 1);
-    const bestUrl = best(playlist, base) || masterUrl;
-    const bestPlaylistRaw = (
-      await axiosGet(bestUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0',
-          'Accept': '*/*',
-          'Referer': finalUrl,
-          'Origin': finalUrl
-        }
-      })
-    ).data;
-    const bestPlaylist = rewriteM3U8(bestPlaylistRaw, bestUrl, finalUrl);
-    console.log(`[M3U8 EXTRACTOR] Mejor URL seleccionada: ${bestUrl}`);
-    return {
-      status: 200,
-      url: finalUrl,
-      content: bestPlaylist
-    };
+      }
+    );
+
+    return apiResponse;
 
   } catch (err) {
     console.error('[M3U8 EXTRACTOR] Error:', err.message);
