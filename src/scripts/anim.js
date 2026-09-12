@@ -426,7 +426,7 @@ const main = async ({ log = console.log } = {}) => {
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
   const sources = [
-    { func: scrapeFLV, path: path.join(dataDir, "tmp_flv.json"), src: "FLV" },
+    //{ func: scrapeFLV, path: path.join(dataDir, "tmp_flv.json"), src: "FLV" },
     { func: scrapeONE, path: path.join(dataDir, "tmp_one.json"), src: "ONE" },
     { func: scrapeTioAnime, path: path.join(dataDir, "tmp_tio.json"), src: "TIO" },
     { func: scrapeJKAnime, path: path.join(dataDir, "tmp_jk.json"), src: "JK" },

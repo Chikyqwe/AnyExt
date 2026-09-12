@@ -41,10 +41,6 @@ const HttpModule = (() => {
 
   return { axiosInstance };
 })();
-
-// ============================================================================
-// MÓDULO: REGEX + EVAL SEGURO
-// ============================================================================
 const ParseModule = (() => {
   const ANIME_INFO = /var\s+anime_info\s*=\s*(\[[^\]]+\])/;
   const EPISODES = /var\s+episodes\s*=\s*(\[[\s\S]*?\]);/;
@@ -52,12 +48,6 @@ const ParseModule = (() => {
   return { ANIME_INFO, EPISODES, safeEval };
 })();
 
-// ============================================================================
-// MÓDULO: PATRONES (CACHE CENTRALIZADO)
-// ============================================================================
-// ============================================================================
-// MÓDULO: PATRONES (CACHE CENTRALIZADO)
-// ============================================================================
 const PatternModule = (() => {
   async function getAnimeFLVPattern() {
     const cacheKey = 'animeflv_pattern';
@@ -112,9 +102,6 @@ const PatternModule = (() => {
   return { getAnimeFLVPattern, getTioPattern };
 })();
 
-// ============================================================================
-// MÓDULO: STREAMING / PROXY
-// ============================================================================
 const StreamModule = (() => {
   function getRefererForHost(host) {
     if (!host) return 'https://www.mp4upload.com/';

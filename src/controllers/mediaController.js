@@ -746,25 +746,29 @@ async function getMangaInfoOptimized(manga, uid) {
 
 exports.basicInfo = asyncHandler(async (req, res) => {
   const uid = parseInt(req.query.uid);
-  const anime = getAnimeByUnitId(uid);
 
-  if (!anime) {
-    return res.status(404).json({ error: `No se encontró anime con uid=${uid}` });
+  // Intenta obtener por Anime, luego Manga, luego Drama
+  let result = getAnimeByUnitId(uid);
+  if (result.error) result = getMangaByUnitId(uid);
+  if (result.error) result = getDramaByUnitId(uid);
+
+  // Si después de los 3 intentos sigue habiendo error, responde 404
+  if (result.error) {
+    return res.status(404).json({ error: `No se encontró ningún recurso con uid=${uid}` });
   }
 
-  // Obtiene los valores del objeto source y busca el primero que tenga valor
-  const firstValidUrl = Object.values(anime.sources || {}).find(url => url !== null) || null;
+  // Obtiene la primera URL válida del objeto sources de 'result'
+  const firstValidUrl = Object.values(result.sources || {}).find(url => url !== null) || null;
 
   res.json({
-    type: 'anime',
-    title: anime.title,
-    slug: anime.slug,
-    image: anime.image,
+    type: result.type || 'anime',
+    title: result.title,
+    slug: result.slug,
+    image: result.image,
     furl: firstValidUrl,
     uid,
   });
 });
-
 exports.img = asyncHandler(async (req, res) => {
   const { uid, type, ep } = req.body;
   if (!uid) return res.status(400).json({ error: 'Falta uid' });
